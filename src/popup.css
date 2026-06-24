@@ -18,6 +18,12 @@ body {
 }
 .bv-title { font-weight: 700; font-size: 15px; }
 .bv-ver { color: #999; font-size: 11px; }
+.bv-tip {
+  margin-left: auto;                 /* push to the far right of the header */
+  font-size: 12px; font-weight: 600; white-space: nowrap;
+  text-decoration: none; color: #b06a00;   /* coffee/amber */
+}
+.bv-tip:hover { text-decoration: underline; }
 
 .bv-note { margin: 12px 16px; color: #555; font-size: 12px; }
 

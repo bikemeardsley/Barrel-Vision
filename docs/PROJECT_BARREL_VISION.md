@@ -356,7 +356,8 @@ insufficient.
     start), keyed by MLBAM id (added to the hand index), cached per pitcher (`GET_QS` message). The
     `captureRosterQS` scrape and `rosterStats` cache were removed. Index cache bumped to `v2` (hand index
     now carries `id`).
-  - **Popup polish:** the data button is grey like Reset (was red) and renamed "Refresh data".
+  - **Popup polish:** the data button is grey like Reset (was red) and renamed "Refresh data". Added a
+    "☕ Tip" (Buy Me a Coffee) link in the popup header — a plain external link, so no added permissions.
   - **Debug readout** moved to the very bottom-left (`bottom: 10px`; the 48px offset cleared the
     userscript's gear, which no longer exists in the extension).
 - **v0.9.0 (MV3 port)** —
