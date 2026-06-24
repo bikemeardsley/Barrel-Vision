@@ -382,6 +382,26 @@ insufficient.
 
 ## 15. Changelog
 
+- **v0.14.0 (pitcher matchup: park-neutral wOBA + z-score colour + day's park)** — reworked the **pitcher**
+  side of the matchup ratings per the methodology review (batter side unchanged):
+  - **Base metric OPS → self-computed team wOBA.** Team wOBA is computed in the SW from the StatsAPI
+    hitting components we already fetch (`baseOnBalls`/`intentionalWalks`/`hitByPitch`/`hits`/`doubles`/
+    `triples`/`homeRuns`/`atBats`/`sacFlies`) with FanGraphs linear weights (`BV.teamWoba`) — **no new
+    source**, correct event weighting (a HR isn't just "4 bases"). OPS is dropped.
+  - **Park-neutral base + day's park folded in.** Each team's raw wOBA is **home-park-neutralized**
+    (`parkNeutralizeWoba`) so today's park can be applied separately without double-counting. The content
+    script multiplies the opponent's neutral wOBA by **today's** park multiplier (`parkWobaMult`) — the
+    game is at the home team's park, read off ESPN's "`@`" prefix — then re-z's it. So a middling lineup at
+    Coors renders tougher than at Petco. Park factors are a static multi-year-regressed table
+    (`CONFIG.PARK_FACTORS`, 100 = neutral, keyed by StatsAPI abbrev; approximate + easy to update).
+  - **Colour ← continuous z-score, not the ordinal rank.** `pitcherZG(z)` drives green→gold→red off the
+    park-adjusted z (clamped ±2 SD), killing the "bunched middle" distortion where mid-teams separated by a
+    few thousandths of wOBA looked very different. The **1–30 number stays the label** (season talent rank,
+    OPRK convention); the tooltip spells out the neutral wOBA, the day's park, and the adjusted read.
+  - **Index shape:** `teamOff[id]` now `{ woba, nwoba, pf, rank, z }` + a sibling `teamOffMeta`
+    `{ mean, sd, total }` (league stats for the per-game re-z). Cache key **v4 → v5**.
+  - *Deferred (review's phase 2, low priority in-season):* per-pitcher handedness split, early-season
+    projection regression (moot past late May), reliever lower-confidence flag.
 - **v0.13.0 (day-of matchup ratings)** —
   - **Matchup ratings inline by the OPP**, football-OPRK-style (green→gold→red; red is the app `#d62e2e`).
     - Both marks render in the **OPP cell** after the team abbrev (the wrapper is set inline-flex so they

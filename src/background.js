@@ -138,19 +138,38 @@ async function buildFresh(forcePl) {
     }
   } catch (e) { console.warn(`[Barrel Vision] StatsAPI handedness skipped: ${e.message}`); }
 
-  // Team offense for the pitcher matchup: rank all 30 teams by season OPS (rank 1 = best offense = the
-  // TOUGHEST matchup for a pitcher). teamAbbr maps StatsAPI abbreviation -> id so the content script can
-  // turn ESPN's opponent abbrev into a team. Best-effort: a failure just hides the pitcher grades.
-  let teamOff = {}, teamAbbr = {};
+  // Team offense for the pitcher matchup: grade all 30 teams by PARK-NEUTRAL team wOBA (rank 1 = best
+  // offense = the TOUGHEST matchup). wOBA is self-computed from the StatsAPI hitting components (no new
+  // source) with correct linear weights, then home-park-neutralized so the content script can fold in
+  // today's park separately without double-counting (see CONFIG.teamWoba / parkNeutralizeWoba). Each
+  // entry carries { woba (raw), nwoba (park-neutral), pf (home run-PF), rank, z }; `teamOffMeta` holds
+  // the league mean/sd of nwoba so the content script can re-z each game on its day's park. teamAbbr
+  // maps StatsAPI abbreviation -> id (ESPN opponent abbrev -> team). Best-effort: a failure hides grades.
+  let teamOff = {}, teamAbbr = {}, teamOffMeta = null;
   try {
     const teams = (JSON.parse(await fetchText(BV.CONFIG.mlbTeams(Y))).teams) || [];
-    for (const t of teams) if (t.id && t.abbreviation) teamAbbr[t.abbreviation.toUpperCase()] = t.id;
+    const idToAbbr = {};
+    for (const t of teams) if (t.id && t.abbreviation) {
+      const A = t.abbreviation.toUpperCase();
+      teamAbbr[A] = t.id; idToAbbr[t.id] = A;
+    }
     const hit = JSON.parse(await fetchText(BV.CONFIG.mlbTeamHitting(Y)));
     const rows = ((hit.stats && hit.stats[0] && hit.stats[0].splits) || [])
-      .map(s => ({ id: s.team && s.team.id, ops: parseFloat(s.stat && s.stat.ops) }))
-      .filter(r => r.id && Number.isFinite(r.ops))
-      .sort((a, b) => b.ops - a.ops);                              // highest OPS first -> rank 1
-    rows.forEach((r, i) => { teamOff[r.id] = { ops: r.ops, rank: i + 1 }; });
+      .map(s => {
+        const id = s.team && s.team.id;
+        const woba = BV.teamWoba(s.stat);
+        const pf = (BV.PARK_FACTORS[idToAbbr[id]] ?? 100);          // home park run factor (neutral if unknown)
+        return { id, woba, pf, nwoba: BV.parkNeutralizeWoba(woba, pf) };
+      })
+      .filter(r => r.id && Number.isFinite(r.nwoba))
+      .sort((a, b) => b.nwoba - a.nwoba);                           // highest park-neutral wOBA first -> rank 1
+    const vals = rows.map(r => r.nwoba);
+    const mean = vals.reduce((s, v) => s + v, 0) / (vals.length || 1);
+    const sd = Math.sqrt(vals.reduce((s, v) => s + (v - mean) ** 2, 0) / (vals.length || 1)) || 1;
+    rows.forEach((r, i) => {
+      teamOff[r.id] = { woba: r.woba, nwoba: r.nwoba, pf: r.pf, rank: i + 1, z: (r.nwoba - mean) / sd };
+    });
+    teamOffMeta = { mean, sd, total: rows.length };
   } catch (e) { console.warn(`[Barrel Vision] team offense skipped: ${e.message}`); }
 
   // Pitcher List weekly ranks, keyed by normalized name -> { sp?, rp?, slug, tier, team } (a flat
@@ -162,7 +181,7 @@ async function buildFresh(forcePl) {
   try { pl = await getPL(forcePl); }
   catch (e) { console.warn(`[Barrel Vision] Pitcher List skipped: ${e.message}`); }
 
-  return { bat, pit, pct, hand, pl, teamOff, teamAbbr };
+  return { bat, pit, pct, hand, pl, teamOff, teamAbbr, teamOffMeta };
 }
 
 function countsOf(indexes) {

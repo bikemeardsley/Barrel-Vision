@@ -595,11 +595,13 @@
 
   // ---------------------------------------------------------------------------
   // Matchup ratings (day-of). Keyed off ESPN's own opponent cell: the opponent team abbrev + that day's
-  // probable pitcher (last name). For BATTERS we grade their season OPS vs the opposing starter's hand and
-  // append the hand as " L"/" R"; for PITCHERS we grade the opponent team's offense. Shown as a small
-  // A–F colour-graded chip inline by the OPP, like ESPN's OPRK.
+  // probable pitcher (last name). For BATTERS we grade their season wOBA vs the opposing starter's hand and
+  // append the hand as " L"/" R"; for PITCHERS we grade the opponent team's park-neutral offense, folding
+  // in today's park. Shown as a small colour-graded chip inline by the OPP, like ESPN's OPRK (number =
+  // season talent rank; colour = continuous z-score on the day's park, not the ordinal rank).
   // ---------------------------------------------------------------------------
   const clamp01 = x => Math.max(0, Math.min(1, x));
+  const clamp = (x, lo, hi) => Math.max(lo, Math.min(hi, x));
 
   // Matchup colour, green → gold → red (g: 0 = worst, red .. 1 = best, green). Red is the app red
   // (#d62e2e) so it sits with the rest of the page; gold + green are strong enough to read on white.
@@ -664,8 +666,13 @@
     return { g: clamp01((exp - 0.255) / (0.375 - 0.255)), exp, B, P };
   }
 
-  // Pitcher goodness from the opponent's offense rank (1 = best offense = toughest; last = weakest = best).
-  function pitcherG(rank, total) { return total > 1 ? clamp01((rank - 1) / (total - 1)) : 0.5; }
+  // Pitcher goodness 0..1 from the opponent-offense z-score (continuous, NOT the ordinal rank - this is
+  // what kills the "bunched middle" colour distortion). z = +ve means a strong offense (tough = red = low
+  // g); z = -ve means a weak offense (easy = green = high g). Clamped to ±2 SD per the methodology review.
+  function pitcherZG(z) {
+    const C = 2;
+    return clamp01((C - clamp(z, -C, C)) / (2 * C));
+  }
 
   // Matchup tooltip shared by the symbol + its async refinement.
   function muTitle(label, m, hand) {
@@ -767,11 +774,34 @@
     } else {
       if (!pitShow) return;                                    // SP only on its start day; RP/closers always
       const off = (oppTeamId && indexes.teamOff) ? indexes.teamOff[oppTeamId] : null;
-      const total = indexes.teamOff ? Object.keys(indexes.teamOff).length : 0;
-      if (!off || !total) return;
-      renderOppRank(tr, off.rank, pitcherG(off.rank, total),
-        `Opp offense rank ${off.rank}/${total} (1 = best offense = toughest)`);   // OPRK-style, in the OPP cell
+      const meta = indexes.teamOffMeta;
+      if (!off || !meta || !(meta.sd > 0)) return;
+      // Fold in TODAY's park: the game is at the HOME team's park (the rostered pitcher's own park when
+      // home, the opponent's when away - read off ESPN's "@" prefix). Multiply the opponent's park-neutral
+      // wOBA by the day's park multiplier, then re-z against the league to drive the colour. The 1-30 LABEL
+      // stays the season talent rank (OPRK convention); only the colour reflects the park.
+      const pitTeamId = (indexes.hand[want] || {}).team;
+      const homeTeamId = isRowAway(tr) ? oppTeamId : pitTeamId;
+      const homeOff = homeTeamId && indexes.teamOff[homeTeamId];
+      const todayPf = homeOff ? homeOff.pf : 100;
+      const adjWoba = off.nwoba * BV.parkWobaMult(todayPf);
+      const adjZ = (adjWoba - meta.mean) / meta.sd;
+      renderOppRank(tr, off.rank, pitcherZG(adjZ), oppRankTitle(off, meta, todayPf, adjZ));
     }
+  }
+
+  // Pitcher matchup tooltip: the season talent rank (label) + the park-adjusted read (colour). Concise -
+  // "#rank/30 (1 = toughest) · wOBA · [park] · read (z)". The park term shows only when it's not neutral.
+  function oppRankTitle(off, meta, pf, adjZ) {
+    const park = pf !== 100 ? ` · park ×${BV.parkWobaMult(pf).toFixed(2)}` : '';
+    const read = adjZ >= 0.5 ? 'tough' : adjZ <= -0.5 ? 'soft' : 'average';
+    return `Opp offense #${off.rank}/${meta.total} (1 = toughest) · wOBA ${BV.dec3(off.nwoba)}`
+         + `${park} · ${read} (z ${adjZ >= 0 ? '+' : ''}${adjZ.toFixed(1)})`;
+  }
+  // Is the rostered player AWAY today? ESPN shows the opponent as "@CIN" (away) vs "CIN" (home) in .opp.
+  function isRowAway(tr) {
+    const opp = tr.querySelector('.opp');
+    return !!opp && /@/.test(opp.textContent || '');
   }
 
   // Insert the opposing pitcher's hand inside ESPN's "(name)" -> "(name • L)" (the bullet keeps the L/R

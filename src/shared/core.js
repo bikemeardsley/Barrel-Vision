@@ -32,6 +32,62 @@
   function gapEra(v) { const n = num(v); if (!Number.isFinite(n)) return ''; const s = n >= 0 ? '+' : '−'; return `${s}${Math.abs(n).toFixed(2)}`; } // ERA-scale signed gap
 
   // ---------------------------------------------------------------------------
+  // Pitcher-matchup math (opponent-offense quality). Pure + shared: the SW builds
+  // the per-team base (park-neutral team wOBA + league z), the content script folds
+  // in the DAY's park per game. Per the methodology review:
+  //   - base metric = team wOBA (correct linear weights), not OPS - and self-computed
+  //     from the StatsAPI hitting components we already fetch (no new source).
+  //   - the base is PARK-NEUTRALIZED so today's park can be applied separately without
+  //     double-counting (a Coors-inflated raw line shouldn't read as elite talent).
+  //   - colour is driven by a continuous z-score, not the ordinal 1-30 rank (the rank
+  //     is kept only as the label, OPRK-style) - this kills the "bunched middle" distortion.
+  // ---------------------------------------------------------------------------
+
+  // FanGraphs wOBA linear weights (representative recent-season set; ~stable YoY to ±.01,
+  // and for RANK-ORDERING 30 teams the exact vintage is immaterial). uBB = BB - IBB.
+  const WOBA_WEIGHTS = { bb: 0.690, hbp: 0.722, b1: 0.884, b2: 1.257, b3: 1.593, hr: 2.058 };
+
+  // Team wOBA from a StatsAPI hitting `stat` object (teams/stats?group=hitting). Returns NaN
+  // if the components are missing. den = AB + BB - IBB + SF + HBP (the standard wOBA PA base).
+  function teamWoba(stat) {
+    if (!stat) return NaN;
+    const n = k => { const v = parseFloat(stat[k]); return Number.isFinite(v) ? v : 0; };
+    const bb = n('baseOnBalls'), ibb = n('intentionalWalks'), hbp = n('hitByPitch');
+    const h = n('hits'), d = n('doubles'), t = n('triples'), hr = n('homeRuns');
+    const ab = n('atBats'), sf = n('sacFlies');
+    const b1 = h - d - t - hr, ubb = bb - ibb;             // singles, unintentional walks
+    const den = ab + bb - ibb + sf + hbp;
+    if (!(den > 0)) return NaN;
+    const W = WOBA_WEIGHTS;
+    return (W.bb * ubb + W.hbp * hbp + W.b1 * b1 + W.b2 * d + W.b3 * t + W.hr * hr) / den;
+  }
+
+  // Multi-year regressed RUN park factors, 100 = neutral (FanGraphs-style, compressed toward 100;
+  // APPROXIMATE - meant to be eyeballed/updated, not authoritative). Keyed by StatsAPI abbreviation.
+  // 2025-26 temporary parks flagged: ATH = Sutter Health Park (Sacramento, hot/hitter-friendly),
+  // TB = Steinbrenner Field (Tampa, small/hitter-friendly). Missing team -> neutral (100).
+  const PARK_FACTORS = {
+    COL: 112, BOS: 107, CIN: 105, KC: 104, AZ: 103, ATH: 103, PHI: 102, TEX: 102, BAL: 101,
+    LAA: 101, ATL: 101, CHC: 101, TB: 101, CWS: 100, WSH: 100, TOR: 100, MIN: 100, HOU: 100,
+    NYY: 100, MIL: 99, STL: 99, PIT: 99, NYM: 99, LAD: 99, CLE: 99, DET: 98, MIA: 98,
+    SF: 97, SD: 96, SEA: 96,
+  };
+
+  // wOBA is ~half as park-elastic as runs, so a RUN park factor overstates the wOBA effect.
+  // PARK_WOBA_ELASTICITY damps the run factor into a wOBA multiplier; HOME_GAME_SHARE (~half the
+  // schedule at home) is how much of a season line a team's home park actually colours.
+  const PARK_WOBA_ELASTICITY = 0.5, HOME_GAME_SHARE = 0.5;
+  // Full-park wOBA multiplier for a single game at a park with run factor `pf` (100 = 1.000).
+  function parkWobaMult(pf) {
+    const p = Number.isFinite(pf) ? pf : 100;
+    return 1 + (p / 100 - 1) * PARK_WOBA_ELASTICITY;
+  }
+  // Strip a team's HOME park from its season line: divide by the season-weighted home multiplier.
+  function parkNeutralizeWoba(rawWoba, homePf) {
+    return rawWoba / (1 + (parkWobaMult(homePf) - 1) * HOME_GAME_SHARE);
+  }
+
+  // ---------------------------------------------------------------------------
   // Name normalization - the join key between ESPN DOM names and Savant feeds.
   // Strips accents / punctuation / suffixes. Used in BOTH the SW (to key the
   // index) and the content script (to normalize DOM names before lookup), so it
@@ -103,7 +159,8 @@
 
     // Matchup ratings (day-of): team identity + offense, and per-batter platoon splits.
     //  - teams: id <-> abbreviation (map ESPN's opponent abbrev -> StatsAPI team id).
-    //  - team hitting: per-team OPS, to rank offenses (a pitcher facing a weak offense = good matchup).
+    //  - team hitting: the wOBA COMPONENTS (BB/IBB/HBP/H/2B/3B/HR/AB/SF) to self-compute park-neutral team
+    //    wOBA and rank offenses (a pitcher facing a weak offense = good matchup). See BV.teamWoba.
     //  - per-batter splits vs LHP / vs RHP (OPS + PA): the batter's production vs the day's opposing hand.
     mlbTeams:       (year) => `https://statsapi.mlb.com/api/v1/teams?sportId=1&season=${year}`,
     mlbTeamHitting: (year) => `https://statsapi.mlb.com/api/v1/teams/stats?stats=season&group=hitting&season=${year}&sportIds=1`,
@@ -298,10 +355,12 @@
     plPrefs: 'plPrefs',             // chrome.storage.sync (Pitcher List display toggles: {on,sp,rp,h})
     debug: 'debug',                 // chrome.storage.sync
     enabled: 'enabled',             // chrome.storage.sync (master on/off; absent = on)
+    // v5: pitcher matchup now grades park-neutral team wOBA (was OPS); teamOff entries carry
+    //     { woba, nwoba, pf, rank, z } and a sibling `teamOffMeta` { mean, sd, total } is added.
     // v4: added team-offense (`teamOff`/`teamAbbr`) + the player's team id on the hand index (matchups).
     // v3: added the Savant percentile index (`pct`) for the player-card sliders.
     // v2: the hand index also carries the player's MLBAM id (used to compute QS).
-    cacheKey: (year) => `barrelVision:index:v4:${year}`,      // chrome.storage.local
+    cacheKey: (year) => `barrelVision:index:v5:${year}`,      // chrome.storage.local
     qsKey: (year) => `barrelVision:qs:v1:${year}`,            // chrome.storage.local (per-pitcher QS cache)
     splitsKey: (year) => `barrelVision:splits:v1:${year}`,    // chrome.storage.local (per-batter platoon splits)
     plKey: (year) => `barrelVision:pl:v1:${year}`,            // chrome.storage.local (weekly Pitcher List cache)
@@ -313,5 +372,6 @@
     num, pct, pctFrac, dec3, dec2, dec1, gap3, gapEra,
     normName, handWord, cellSignal, cellColor, defaultPrefs,
     defaultPlPrefs, mergePlPrefs, plPick, countIndex,
+    teamWoba, parkWobaMult, parkNeutralizeWoba, PARK_FACTORS,
   };
 })(typeof self !== 'undefined' ? self : this);

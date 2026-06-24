@@ -188,9 +188,12 @@ scripts/     package.ps1 — zips src/ for store upload
 
 ## Status
 
-`v0.13.0` — added **day-of matchup ratings** by the OPP (batters: a 6-tier ▲▲/▲/⟋/⟍/▼/▼▼ symbol blending their OPS vs the
+`v0.14.0` — reworked the **pitcher** matchup rating: the opponent-offense badge now grades **park-neutral
+team wOBA** (self-computed from StatsAPI components, not OPS), **folds in the day's ballpark**, and colours
+by a **continuous z-score** instead of the ordinal rank (the 1–30 number stays the OPRK-style label). Built on
+`v0.13.0` — **day-of matchup ratings** by the OPP (batters: a 6-tier ▲▲/▲/⟋/⟍/▼/▼▼ symbol blending their wOBA vs the
 opposing starter's hand with that starter's quality, hand shown as `(Drohan • L)`; starting pitchers: an
-opponent-offense rank badge in the OPP column), read off ESPN's own opponent cell. Built on
+opponent-offense badge in the OPP column), read off ESPN's own opponent cell. Built on
 `v0.12.0` — player-card **Savant percentile sliders** (a sixth Savant feed; actual values on Savant-style
 bars), **Pitcher List "Top 150 Hitters" ranks** (on batter rows), per-column **Show** + **Highlight**
 toggles, **Pitcher List on/off** (master + per-list) and handedness toggles, and cell highlighting as a
