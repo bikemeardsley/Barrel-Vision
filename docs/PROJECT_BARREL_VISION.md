@@ -281,6 +281,20 @@ pitcher. This replaced the earlier roster-list scrape, which read whatever stat 
 was on (Season / Last 7 / 15 / 30 / Projected) and could therefore show a non-season value on the card.
 The modal fills the Season-row QS asynchronously (`GET_QS` message) so it isn't blocked.
 
+**Two-way players follow the Batting/Pitching toggle (v0.16.0).** The player card for a two-way player
+(Ohtani) carries a Batting/Pitching toggle that swaps the stats table in place; it defaults to Batting.
+Decoration used to be one-shot (a single `data-savant-done` flag locked the modal), so flipping to
+Pitching left the batting Advanced Stats table, the OBP+SLG→OPS condense and the batter sliders showing
+while ESPN's table had switched to pitching — and the W+L→QS condense (with the async season-QS fill)
+never ran. The flag now records **which side** was decorated (`bat`/`pit`); when the active side changes
+(detected by the pitching `.stat-ip` column appearing/disappearing as ESPN re-renders, which the
+observer catches), `decorateModal` tears down only its own additions (`clearModalInjections`: the
+handedness + PL spans, the Advanced Stats table, the sliders — ESPN owns and re-renders its own stats
+table) and re-decorates for the side now shown. So switching to Pitching swaps in pitcher Advanced Stats,
+runs the QS condense + season-QS fill, shows the **throwing** hand and the SP/closer PL rank; switching
+back restores the batter view. Single-position players are unaffected (their side never changes, so the
+modal is still decorated exactly once).
+
 ---
 
 ## 9. Build, install & verify
@@ -402,6 +416,19 @@ insufficient.
 
 ## 15. Changelog
 
+- **v0.16.0 (two-way player card follows the Batting/Pitching toggle)** —
+  - **Player-card modal now re-decorates when a two-way player's Batting/Pitching toggle flips.** The card
+    for a two-way player (Ohtani) has a Batting/Pitching toggle that swaps the stats table in place,
+    defaulting to Batting. The modal flag (`data-savant-done`) was one-shot, so flipping to Pitching left
+    the **batting** Advanced Stats table / OBP+SLG→OPS condense / batter sliders in place and the **W+L→QS
+    condense (with the async season-QS fill) never ran**. The flag now records the decorated **side**
+    (`bat`/`pit`); when the active side changes (the pitching `.stat-ip` column appears/disappears as ESPN
+    re-renders — caught by the existing observer), `decorateModal` tears down only its own additions
+    (new `clearModalInjections`: handedness + PL spans, Advanced Stats table, sliders — ESPN re-renders
+    its own stats table) and rebuilds for the side now shown: pitcher Advanced Stats, the QS condense +
+    season-QS fill, the **throwing** hand and the SP/closer PL rank (and back to the batter view on
+    toggle-back). Single-position players are decorated exactly once as before (their side never changes).
+  - Version **0.15.0 → 0.16.0**. No new permissions, no data-layer change (content-script only).
 - **v0.15.0 (selectable starters rank source: Pitcher List / Razzball / RotoBaller)** —
   - **New "Starters from" dropdown** in the popup's rank section picks the SP rank source. **Closers and
     batters always stay Pitcher List** (the other two sites rank starters only). Stored in

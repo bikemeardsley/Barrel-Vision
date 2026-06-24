@@ -403,12 +403,21 @@
     return v < 1 ? v.toFixed(3).replace(/^0/, '') : v.toFixed(3);
   }
 
+  // Remove only OUR modal additions so decorateModal can rebuild them for the other side of a two-way
+  // player's Batting/Pitching toggle: the handedness + PL spans by the player's name (their content is
+  // side-specific - bats vs throws, hitter rank vs SP/closer rank) and the Advanced Stats + sliders
+  // blocks beneath the table. ESPN owns and re-renders the stats table itself on toggle (fresh OPS/QS
+  // cells), so we leave that to ESPN and only undo what we injected.
+  function clearModalInjections(modal) {
+    modal.querySelectorAll('.savant-hand, .savant-pl, .savant-adv, .savant-sliders').forEach(el => el.remove());
+  }
+
   // The player-card modal (opens on a player-name click) - a separate DOM target from the roster
   // tables. Adds handedness under the team name; one computed column (OPS for hitters / QS for
   // pitchers) on ESPN's Season + Last-7 rows; and a shaded Advanced Stats table beneath them.
   function decorateModal(indexes) {
     const modal = document.querySelector('.player-card-modal');
-    if (!modal || modal.hasAttribute(FLAG)) return;
+    if (!modal) return;
 
     const statsTable = modal.querySelector('.player-stats-table table.Table');
     if (!statsTable) return;                       // still rendering - don't flag, retry next mutation
@@ -418,6 +427,14 @@
 
     const isPit = !!statsTable.querySelector('thead .stat-ip');
     const kind = isPit ? 'pit' : 'bat';
+
+    // Two-way players (Ohtani) get a Batting/Pitching toggle that swaps this stats table in place. The
+    // FLAG records WHICH side we last decorated: same kind -> nothing changed, bail; different kind ->
+    // the user flipped the toggle, so tear down our prior pass and re-decorate for the active side. That
+    // re-runs the OPS/QS condense (incl. the async season-QS fill, which only applies on the pitching
+    // side) and rebuilds handedness, the Advanced Stats table and the sliders for the side now shown.
+    if (modal.getAttribute(FLAG) === kind) return;
+    if (modal.hasAttribute(FLAG)) clearModalInjections(modal);
 
     const nameWrap = modal.querySelector('.player-name');
     const name = nameWrap ? [...nameWrap.querySelectorAll('div')].map(d => (d.textContent || '').trim()).filter(Boolean).join(' ') : '';
@@ -498,7 +515,7 @@
     buildAdvancedTable(modal, kind, lookup(indexes[kind], name), hand && hand.slug);
     buildSliders(modal, kind, lookup((indexes.pct && indexes.pct[kind]) || {}, name), lookup(indexes[kind], name));
 
-    modal.setAttribute(FLAG, '1');
+    modal.setAttribute(FLAG, kind);                // record the decorated side, not just "done" (see toggle note above)
   }
 
   // Build the standalone "Advanced Stats" table beneath ESPN's Stats table, styled with ESPN's own
