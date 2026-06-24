@@ -207,6 +207,7 @@
   const STORAGE = {
     prefs: 'prefs',                 // chrome.storage.sync
     debug: 'debug',                 // chrome.storage.sync
+    enabled: 'enabled',             // chrome.storage.sync (master on/off; absent = on)
     // v2: the hand index now also carries the player's MLBAM id (used to compute QS).
     cacheKey: (year) => `barrelVision:index:v2:${year}`,      // chrome.storage.local
     qsKey: (year) => `barrelVision:qs:v1:${year}`,            // chrome.storage.local (per-pitcher QS cache)

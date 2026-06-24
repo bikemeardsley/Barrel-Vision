@@ -10,6 +10,15 @@
   <div class="bv-head">
     <span class="bv-title">Barrel Vision</span>
     <span class="bv-ver" id="bv-ver"></span>
+    <!-- Master on/off. Flips chrome.storage.sync 'enabled'; the content script tears the overlay down /
+         back up live (no reload), and the toolbar right-click menu mirrors the same switch. -->
+    <span class="bv-master" title="Turn Barrel Vision on or off">
+      <span class="bv-master-lab" id="bv-master-lab">On</span>
+      <label class="bv-switch">
+        <input type="checkbox" id="bv-enabled" checked aria-label="Enable Barrel Vision">
+        <span class="bv-slider"></span>
+      </label>
+    </span>
     <!-- Official Buy Me a Coffee button, bundled locally (no runtime remote fetch). Opens a tab; no extra permissions. -->
     <a class="bv-tip" href="https://buymeacoffee.com/bikemeardsley" target="_blank" rel="noopener" title="Buy me a coffee">
       <img src="assets/bmc-button.png" alt="Buy me a coffee">
@@ -30,7 +39,7 @@
   </table>
 
   <div class="bv-foot">
-    <label class="bv-debug-toggle"><input type="checkbox" id="bv-debug"> Show debug readout</label>
+    <label class="bv-debug-toggle"><span class="bv-switch"><input type="checkbox" id="bv-debug"><span class="bv-slider"></span></span> Show debug readout</label>
     <div class="bv-foot-btns">
       <button type="button" id="bv-reset">Reset to defaults</button>
       <button type="button" id="bv-refresh">Refresh advanced data</button>

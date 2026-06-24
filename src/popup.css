@@ -18,8 +18,16 @@ body {
 }
 .bv-title { font-weight: 700; font-size: 15px; }
 .bv-ver { color: #999; font-size: 11px; }
+
+/* Master on/off, grouped at the right of the header (just before the BMC button). */
+.bv-master {
+  margin-left: auto;                 /* push the master toggle + BMC button to the right of the header */
+  display: inline-flex; align-items: center; gap: 7px;
+}
+.bv-master-lab { font-size: 11px; font-weight: 700; color: #888; text-transform: uppercase; letter-spacing: .4px; min-width: 18px; }
+
 .bv-tip {
-  margin-left: auto;                 /* push the official BMC button to the far right of the header */
+  margin-left: 0;                    /* sits just right of the master toggle (header gap handles spacing) */
   display: inline-flex; line-height: 0;
 }
 .bv-tip img { height: 30px; width: auto; display: block; }
@@ -44,6 +52,20 @@ body {
 }
 
 input[type="checkbox"] { width: 15px; height: 15px; cursor: pointer; accent-color: #d62e2e; margin: 0; }
+
+/* iOS-style toggle switch, reused for the master on/off, the per-metric "On" cells, and debug.
+   The checkbox is layered transparent over the track so native click/keyboard behaviour is kept. */
+.bv-switch { position: relative; display: inline-block; width: 34px; height: 20px; flex: none; vertical-align: middle; cursor: pointer; }
+.bv-switch input[type="checkbox"] { position: absolute; inset: 0; width: 100%; height: 100%; margin: 0; opacity: 0; cursor: pointer; }
+.bv-slider { position: absolute; inset: 0; background: #d0d0d5; border-radius: 999px; transition: background .18s ease; }
+.bv-slider::before {
+  content: ""; position: absolute; height: 16px; width: 16px; left: 2px; top: 2px;
+  background: #fff; border-radius: 50%; box-shadow: 0 1px 2px rgba(0, 0, 0, .25);
+  transition: transform .18s ease;
+}
+.bv-switch input[type="checkbox"]:checked + .bv-slider { background: #d62e2e; }     /* app red when on */
+.bv-switch input[type="checkbox"]:checked + .bv-slider::before { transform: translateX(14px); }
+.bv-switch input[type="checkbox"]:focus-visible + .bv-slider { box-shadow: 0 0 0 2px rgba(214, 46, 46, .4); }
 
 .bv-foot {
   display: flex; justify-content: space-between; align-items: center; gap: 10px;

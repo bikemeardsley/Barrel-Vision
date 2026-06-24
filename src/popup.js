@@ -63,7 +63,7 @@
     const dirLabel = p.dir === 'low' ? 'lower = better' : 'higher = better';
     return `<tr data-key="${key}">
         <td class="bv-m-lab">${meta[key].label}</td>
-        <td class="bv-m-onc"><input type="checkbox" class="bv-m-en" ${p.enabled ? 'checked' : ''}></td>
+        <td class="bv-m-onc"><label class="bv-switch"><input type="checkbox" class="bv-m-en" ${p.enabled ? 'checked' : ''}><span class="bv-slider"></span></label></td>
         <td><input type="text" class="bv-m-th" value="${fmtTh(key, p.threshold)}" ${p.enabled ? '' : 'readonly'}></td>
         <td class="bv-m-dir">${dirLabel}</td>
       </tr>`;
@@ -113,6 +113,14 @@
       PREFS[key] = { ...PREFS[key], threshold: parseTh(e.target.value) };
       scheduleWrite();
     }
+  });
+
+  // Master on/off. Writes chrome.storage.sync 'enabled'; the content script (live) and the toolbar
+  // right-click menu both listen for this key, so flipping it here updates everywhere at once.
+  function setMasterLabel(on) { document.getElementById('bv-master-lab').textContent = on ? 'On' : 'Off'; }
+  document.getElementById('bv-enabled').addEventListener('change', e => {
+    setMasterLabel(e.target.checked);
+    chrome.storage.sync.set({ [BV.STORAGE.enabled]: e.target.checked });
   });
 
   document.getElementById('bv-debug').addEventListener('change', e => {
@@ -199,9 +207,12 @@
   (async () => {
     document.getElementById('bv-ver').textContent = 'v' + chrome.runtime.getManifest().version;
     try {
-      const obj = await chrome.storage.sync.get([BV.STORAGE.prefs, BV.STORAGE.debug]);
+      const obj = await chrome.storage.sync.get([BV.STORAGE.prefs, BV.STORAGE.debug, BV.STORAGE.enabled]);
       PREFS = mergePrefs(obj[BV.STORAGE.prefs]);
       document.getElementById('bv-debug').checked = obj[BV.STORAGE.debug] === true;
+      const on = obj[BV.STORAGE.enabled] !== false;            // default on
+      document.getElementById('bv-enabled').checked = on;
+      setMasterLabel(on);
     } catch (_) { /* defaults already set */ }
     try {
       const o = (await chrome.storage.local.get(plOverrideKey()))[plOverrideKey()];

@@ -382,6 +382,22 @@ insufficient.
 
 ## 15. Changelog
 
+- **v0.11.0 (master on/off + PL link tidy)** —
+  - **Master on/off switch.** A new `chrome.storage.sync` `enabled` flag (absent = on) with two entry
+    points that write the same key: an **iOS-style toggle at the right of the popup header**, and a
+    **right-click item on the toolbar icon** ("Enable Barrel Vision", checkbox, `contexts:['action']`;
+    adds the `contextMenus` permission). The icon shows a greyed **OFF** badge when off.
+  - **Live teardown, no reload.** The content script honours `enabled` via `start()`/`stop()`: off →
+    `teardown()` removes every injected cell/span, un-hides the ESPN columns we collapsed, and clears the
+    shading on ESPN's own OPS/ERA/WHIP cells, then disconnects the `MutationObserver` (off is strictly
+    lighter than on). At page load when off it never calls `GET_INDEX`, so nothing is fetched. Flipping
+    back on re-runs the boot path. (An open player-card modal keeps its one-shot relabels until reopened.)
+  - **All popup checkboxes are now Apple-style switches** (master, per-metric "On", debug) via a shared
+    `.bv-switch` component, app-red when on.
+  - **Pitcher List link moved onto the rank badge.** The separate "Pitcher List" link in the modal's
+    Advanced Stats header is gone; the inline **"• PL #N"** badge is now itself an `<a>` to the player's
+    PL page (`/player/{slug}/`) when a slug is known (auto-fetched lists; pasted overrides stay plain
+    text), keeping the existing hover tooltip. The modal header keeps only the **Savant Page** link.
 - **v0.10.0 (Pitcher List ranks)** —
   - **New source: Pitcher List weekly SP + closer rankings, surfaced inline as "• PL #N" after a
     pitcher's handedness** (pitchers only; list view + player-card modal). SP rank from "The List"

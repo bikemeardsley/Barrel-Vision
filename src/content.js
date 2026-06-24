@@ -22,6 +22,7 @@
 
   let PREFS = BV.defaultPrefs();   // replaced by stored prefs at boot; updated live via onChanged
   let showDebug = false;
+  let ENABLED = true;             // master on/off (chrome.storage.sync 'enabled'); absent = on
   let INDEXES = null;              // {bat, pit, hand} from the service worker
   let mo = null;
   let scanTimer = null;
@@ -108,20 +109,34 @@
     return 'bat';
   }
 
-  // Build the inline "• PL #N" badge from a Pitcher List record { sp?, rp?, tier } (pitchers only).
+  // Build the inline "• PL #N" badge from a Pitcher List record { sp?, rp?, tier, slug } (pitchers only).
   // SP rank wins if a player is on both lists (in practice a pitcher is on The List XOR the closer
   // list). The source list (SP vs closer) + tier is named in the tooltip, per the agreed display spec.
-  function plBadge(r) {
+  // The leading bullet always stays plain text; only the "PL #N" part becomes a blue link, and only
+  // when asLink is set AND a slug is known (the player-card overlay; the list view passes asLink=false).
+  function plBadge(r, asLink) {
     if (!r) return null;
     const isSp = r.sp != null;
     const rank = isSp ? r.sp : (r.rp != null ? r.rp : null);
     if (rank == null) return null;
     const span = document.createElement('span');
     span.className = 'savant-pl';
-    span.textContent = `• PL #${rank}`;
     span.title = isSp
       ? `Pitcher List — SP rank${r.tier ? ` (Tier ${String(r.tier).replace(/^T/, '')})` : ''}`
       : 'Pitcher List — closer rank';
+    span.append('• ');                                  // bullet is plain text, never underlined
+    const label = `PL #${rank}`;
+    if (asLink && r.slug) {
+      const a = document.createElement('a');
+      a.className = 'savant-pl-link';
+      a.textContent = label;
+      a.href = `https://pitcherlist.com/player/${r.slug}/`;
+      a.target = '_blank';
+      a.rel = 'noopener';
+      span.appendChild(a);
+    } else {
+      span.append(label);
+    }
     return span;
   }
 
@@ -307,7 +322,7 @@
 
     // Pitcher List rank, inline right after handedness (pitchers only) - same badge as the list view.
     if (isPit && teamEl && !teamEl.parentNode.querySelector('.savant-pl')) {
-      const plSpan = plBadge(plRec);
+      const plSpan = plBadge(plRec, true);              // overlay: "PL #N" links to the player's PL page
       if (plSpan) (teamEl.parentNode.querySelector('.savant-hand') || teamEl).insertAdjacentElement('afterend', plSpan);
     }
 
@@ -363,14 +378,14 @@
       }
     }
 
-    buildAdvancedTable(modal, kind, lookup(indexes[kind], name), hand && hand.slug, isPit ? (plRec && plRec.slug) : '');
+    buildAdvancedTable(modal, kind, lookup(indexes[kind], name), hand && hand.slug);
 
     modal.setAttribute(FLAG, '1');
   }
 
   // Build the standalone "Advanced Stats" table beneath ESPN's Stats table, styled with ESPN's own
   // Table classes so it reads as native. One Season row; cells shaded by the same preference logic.
-  function buildAdvancedTable(modal, kind, row, slug, plSlug) {
+  function buildAdvancedTable(modal, kind, row, slug) {
     const host = modal.querySelector('.player-stats-table');
     if (!host || host.parentNode.querySelector('.savant-adv')) return;
     const cols = BV.CONFIG.columns[kind];
@@ -386,18 +401,15 @@
       }
     }
     // Savant-page link, styled like ESPN's "Complete Stats" link to the right of the Stats header.
+    // The Pitcher List link lives on the "• PL #N" rank badge by the player's name (see plBadge), so
+    // there's no separate PL link here.
     const link = slug
       ? `<a class="AnchorLink header_link" tabindex="0" rel="noopener" target="_blank" href="https://baseballsavant.mlb.com/savant-player/${slug}">Savant Page</a>`
-      : '';
-    // Attribution link back to Pitcher List (pitchers ranked this week) - sends the user to the full
-    // tiers/write-ups on PL's site rather than reproducing them here.
-    const plLink = plSlug
-      ? `<a class="AnchorLink header_link savant-pl-link" tabindex="0" rel="noopener" target="_blank" href="https://pitcherlist.com/player/${plSlug}/">Pitcher List</a>`
       : '';
     const wrap = document.createElement('div');
     wrap.className = 'savant-adv';
     wrap.innerHTML =
-      `<div class="Card__Header__Title__Wrapper savant-adv-title"><h3 class="Card__Header__Title Card__Header__Title--no-theme"><div class="flex justify-between items-center">Advanced Stats${link}${plLink}</div></h3></div>` +
+      `<div class="Card__Header__Title__Wrapper savant-adv-title"><h3 class="Card__Header__Title Card__Header__Title--no-theme"><div class="flex justify-between items-center">Advanced Stats${link}</div></h3></div>` +
       `<div class="ResponsiveTable"><div class="Table__ScrollerWrapper"><div>` +
       `<table class="Table"><thead class="Table__THEAD"><tr class="Table__TR Table__even">${head}</tr></thead>` +
       `<tbody class="Table__TBODY"><tr class="Table__TR Table__TR--sm Table__odd">${body}</tr></tbody></table>` +
@@ -429,8 +441,9 @@
   // ---------------------------------------------------------------------------
   let hudEl = null;
   function updateHud() {
-    // Debug readout shows when enabled; hidden on FantasyCast since the list isn't scanned there.
-    if (!showDebug || /\/fantasycast/i.test(location.pathname)) { if (hudEl) hudEl.style.display = 'none'; return; }
+    // Debug readout shows when the overlay is on and debug is enabled; hidden when the extension is
+    // toggled off, and on FantasyCast (the list isn't scanned there).
+    if (!ENABLED || !showDebug || /\/fantasycast/i.test(location.pathname)) { if (hudEl) hudEl.style.display = 'none'; return; }
     if (!hudEl) {
       hudEl = document.createElement('div');
       hudEl.id = 'savant-hud';
@@ -465,10 +478,34 @@
 
   async function loadState() {
     try {
-      const obj = await chrome.storage.sync.get([BV.STORAGE.prefs, BV.STORAGE.debug]);
+      const obj = await chrome.storage.sync.get([BV.STORAGE.prefs, BV.STORAGE.debug, BV.STORAGE.enabled]);
       PREFS = mergePrefs(obj[BV.STORAGE.prefs]);
       showDebug = obj[BV.STORAGE.debug] === true;
+      ENABLED = obj[BV.STORAGE.enabled] !== false;     // default on (absent / true), off only if explicitly false
     } catch (_) { /* defaults already set */ }
+  }
+
+  // ---------------------------------------------------------------------------
+  // Master on/off teardown - undo every DOM change in place so flipping the switch
+  // takes effect live (no page reload). The inverse of one scan(): remove the cells
+  // and spans we injected, un-hide ESPN columns we collapsed, and clear the shading
+  // we painted onto ESPN's own OPS/ERA/WHIP cells. We also drop our per-row markers
+  // so a later re-enable re-decorates from a clean slate. The open player-card modal
+  // keeps its FLAG (so we don't re-run the one-shot relabels on it); it self-heals
+  // when reopened. After teardown, stop() disconnects the observer so we do NO further
+  // work while off - off is strictly lighter than on, not heavier.
+  // ---------------------------------------------------------------------------
+  function teardown() {
+    document.querySelectorAll('.savant-col, .savant-col-th, .savant-adv-group, .savant-hand, .savant-pl, .savant-adv')
+      .forEach(el => el.remove());
+    document.querySelectorAll('.savant-hidden').forEach(el => el.classList.remove('savant-hidden'));
+    for (const td of document.querySelectorAll('td[data-savant-key]')) {     // ESPN's own shaded cells
+      td.style.backgroundColor = '';
+      delete td.dataset.savantKey;
+      delete td.dataset.savantVal;
+    }
+    document.querySelectorAll('[data-savant-name]').forEach(el => { delete el.dataset.savantName; });
+    document.querySelectorAll('[data-savant-hand-for]').forEach(el => { delete el.dataset.savantHandFor; });
   }
 
   // ---------------------------------------------------------------------------
@@ -496,6 +533,11 @@
   // ---------------------------------------------------------------------------
   chrome.storage.onChanged.addListener((changes, area) => {
     if (area === 'sync') {
+      if (changes[BV.STORAGE.enabled]) {                          // master switch flipped (popup or icon menu)
+        ENABLED = changes[BV.STORAGE.enabled].newValue !== false;
+        if (ENABLED) start(); else stop();
+        return;                                                   // start()/stop() handle the rest
+      }
       if (changes[BV.STORAGE.prefs]) { PREFS = mergePrefs(changes[BV.STORAGE.prefs].newValue); recolorAll(); }
       if (changes[BV.STORAGE.debug]) { showDebug = changes[BV.STORAGE.debug].newValue === true; updateHud(); }
     } else if (area === 'local') {
@@ -514,10 +556,15 @@
   });
 
   // ---------------------------------------------------------------------------
-  // Boot
+  // Start / stop - the overlay's lifecycle, gated by the master switch. start() is
+  // the boot path (fetch the index, first scan, begin observing); it's idempotent
+  // (a live re-enable just re-runs it). stop() disconnects the observer and tears
+  // the overlay down. When off we never call getIndex(), so the service worker is
+  // never woken and nothing is fetched.
   // ---------------------------------------------------------------------------
-  (async () => {
-    await loadState();
+  async function start() {
+    if (mo) return;                                              // already running
+    STATS.error = null;
     updateHud();
     try {
       const resp = await getIndex();
@@ -532,5 +579,20 @@
       updateHud();
       console.error('[Barrel Vision]', err);
     }
+  }
+
+  function stop() {
+    if (mo) { mo.disconnect(); mo = null; }
+    if (scanTimer) { clearTimeout(scanTimer); scanTimer = null; }
+    teardown();
+    updateHud();                                                  // hides the HUD (ENABLED is false)
+  }
+
+  // ---------------------------------------------------------------------------
+  // Boot
+  // ---------------------------------------------------------------------------
+  (async () => {
+    await loadState();
+    if (ENABLED) start(); else updateHud();                      // off: do nothing (no fetch, no observer)
   })();
 })();

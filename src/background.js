@@ -447,5 +447,54 @@ function applyActionRules() {
   });
 }
 
-chrome.runtime.onInstalled.addListener(applyActionRules);
-chrome.runtime.onStartup.addListener(applyActionRules);
+// ---------------------------------------------------------------------------
+// Master on/off - a right-click item on the toolbar icon, mirroring the popup's
+// switch (both write chrome.storage.sync 'enabled'; the content script reacts live).
+// A checkbox-type item shows the current state; we keep its checkmark in sync when
+// the switch is flipped from the popup. A greyed "OFF" badge gives at-a-glance state.
+// ---------------------------------------------------------------------------
+const MENU_ID = 'bv-toggle';
+
+async function isEnabled() {
+  try { const o = await chrome.storage.sync.get(BV.STORAGE.enabled); return o[BV.STORAGE.enabled] !== false; }
+  catch (_) { return true; }
+}
+
+function setBadge(enabled) {
+  try {
+    chrome.action.setBadgeText({ text: enabled ? '' : 'OFF' });
+    if (!enabled) chrome.action.setBadgeBackgroundColor({ color: '#888' });
+  } catch (_) {}
+}
+
+async function setupContextMenu() {
+  const enabled = await isEnabled();
+  setBadge(enabled);
+  if (!chrome.contextMenus) return;
+  chrome.contextMenus.removeAll(() => {                         // removeAll first so re-install can't dup the id
+    chrome.contextMenus.create({
+      id: MENU_ID,
+      title: 'Enable Barrel Vision',
+      type: 'checkbox',
+      checked: enabled,
+      contexts: ['action'],                                    // right-click on the toolbar icon
+    });
+  });
+}
+
+chrome.contextMenus?.onClicked.addListener((info) => {
+  if (info.menuItemId !== MENU_ID) return;
+  chrome.storage.sync.set({ [BV.STORAGE.enabled]: info.checked }); // checkbox items report the NEW state
+});
+
+// Keep the menu checkmark + badge in sync if the switch is flipped elsewhere (the popup).
+chrome.storage.onChanged.addListener((changes, area) => {
+  if (area !== 'sync' || !changes[BV.STORAGE.enabled]) return;
+  const enabled = changes[BV.STORAGE.enabled].newValue !== false;
+  setBadge(enabled);
+  try { chrome.contextMenus?.update(MENU_ID, { checked: enabled }); } catch (_) {}
+});
+
+function onLifecycle() { applyActionRules(); setupContextMenu(); }
+chrome.runtime.onInstalled.addListener(onLifecycle);
+chrome.runtime.onStartup.addListener(onLifecycle);

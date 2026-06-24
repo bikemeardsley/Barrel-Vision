@@ -27,7 +27,10 @@
 /* Pitcher List rank ("• PL #12"), right after handedness (pitchers only). A hair dimmer than the hand
    so the throwing hand stays the primary read; the source list (SP vs closer) + tier is in the tooltip. */
 .savant-pl { margin-left: 5px; color: #6f7888; font-weight: 700; cursor: help; }
-.savant-pl-link { margin-left: 10px; }
+/* In the player-card overlay the "PL #N" part is a blue link to the player's PL page (the bullet stays
+   plain). Blue + underline so it reads as a link against ESPN's light modal. */
+.savant-pl-link { color: #1a6fd4; text-decoration: underline; cursor: pointer; }
+.savant-pl-link:hover { color: #0a52a8; }
 
 /* Advanced Stats table in the player-card modal. */
 .savant-adv { margin-top: 8px; }
