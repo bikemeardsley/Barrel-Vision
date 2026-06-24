@@ -129,7 +129,7 @@
   document.getElementById('bv-refresh').addEventListener('click', async () => {
     const btn = document.getElementById('bv-refresh');
     btn.disabled = true;
-    setStatus('Refreshing Savant data…');
+    setStatus('Refreshing data…');
     try {
       const resp = await sendMessage({ type: 'REFRESH' });
       if (resp && resp.ok) {

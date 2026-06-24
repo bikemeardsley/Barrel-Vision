@@ -93,6 +93,12 @@
     // sports/1/players carries batSide.code / pitchHand.code (L/R/S), primaryPosition, nameSlug.
     mlbStats: (year) => `https://statsapi.mlb.com/api/v1/sports/1/players?season=${year}`,
 
+    // Per-pitcher game log (regular season). QS (Quality Starts) is NOT a field on Savant or StatsAPI
+    // — it is computed from this feed: a start with >=6 IP and <=3 ER. Authoritative season value,
+    // independent of ESPN's list-filter window (the old roster-list scrape got this wrong when the
+    // list was filtered to Last 7/15/30/Projected).
+    mlbStatsGameLog: (id, year) => `https://statsapi.mlb.com/api/v1/people/${id}/stats?stats=gameLog&group=pitching&season=${year}&gameType=R`,
+
     // ESPN's player-table DOM. Class names are obfuscated and shift when ESPN reships their frontend.
     selectors: {
       // Column-label row is the LAST thead tr - ESPN's first thead tr is a group banner.
@@ -186,8 +192,9 @@
   const STORAGE = {
     prefs: 'prefs',                 // chrome.storage.sync
     debug: 'debug',                 // chrome.storage.sync
-    cacheVersion: 'v1',
-    cacheKey: (year) => `barrelVision:index:${'v1'}:${year}`, // chrome.storage.local
+    // v2: the hand index now also carries the player's MLBAM id (used to compute QS).
+    cacheKey: (year) => `barrelVision:index:v2:${year}`,      // chrome.storage.local
+    qsKey: (year) => `barrelVision:qs:v1:${year}`,            // chrome.storage.local (per-pitcher QS cache)
   };
 
   root.BV = {

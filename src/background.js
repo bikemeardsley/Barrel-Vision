@@ -119,7 +119,7 @@ async function buildFresh() {
     for (const p of (json.people || [])) {
       const k = BV.normName(p.fullName || p.firstLastName || `${p.firstName || ''} ${p.lastName || ''}`);
       if (!k) continue;
-      hand[k] = { bats: p.batSide?.code || '', throws: p.pitchHand?.code || '', slug: p.nameSlug || '' };
+      hand[k] = { bats: p.batSide?.code || '', throws: p.pitchHand?.code || '', slug: p.nameSlug || '', id: p.id || '' };
     }
   } catch (e) { console.warn(`[Barrel Vision] StatsAPI handedness skipped: ${e.message}`); }
 
@@ -165,6 +165,33 @@ async function ensureIndex(force) {
 }
 
 // ---------------------------------------------------------------------------
+// Quality Starts - computed per pitcher from the StatsAPI gameLog (>=6 IP & <=3 ER per start).
+// QS is not a field on Savant or StatsAPI; this is the only authoritative source. Cached per id.
+// inningsPitched is a string like "6.1" (6 and 1/3) - parse the fractional part as thirds.
+// ---------------------------------------------------------------------------
+function ipToNum(s) { const [w, f] = String(s).split('.'); return (+w || 0) + ((+f || 0) / 3); }
+
+async function getQS(id) {
+  const key = BV.STORAGE.qsKey(BV.CONFIG.year);
+  let map = {};
+  try { const o = await chrome.storage.local.get(key); map = o[key] || {}; } catch (_) {}
+  const hit = map[id];
+  if (hit && (Date.now() - hit.ts) < BV.CONFIG.cacheTtlHours * 3600e3) return hit.qs;
+
+  const json = JSON.parse(await fetchText(BV.CONFIG.mlbStatsGameLog(id, BV.CONFIG.year)));
+  const splits = (json.stats && json.stats[0] && json.stats[0].splits) || [];
+  let qs = 0;
+  for (const x of splits) {
+    const st = x.stat || {};
+    if (+st.gamesStarted !== 1) continue;                          // QS requires the pitcher started
+    if (ipToNum(st.inningsPitched) >= 6 && +st.earnedRuns <= 3) qs++;
+  }
+  map[id] = { qs, ts: Date.now() };
+  try { await chrome.storage.local.set({ [key]: map }); } catch (_) {}
+  return qs;
+}
+
+// ---------------------------------------------------------------------------
 // Messaging - listener registered SYNCHRONOUSLY at top level so a wake-up
 // message is never missed. Non-async listener that returns `true` to hold the
 // channel open for the async sendResponse (the universally-compatible pattern;
@@ -181,6 +208,12 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
   if (msg.type === 'REFRESH') {
     ensureIndex(true)
       .then(({ counts }) => sendResponse({ ok: true, counts }))
+      .catch(err => sendResponse({ ok: false, error: err.message }));
+    return true;
+  }
+  if (msg.type === 'GET_QS') {
+    getQS(msg.id)
+      .then(qs => sendResponse({ ok: true, qs }))
       .catch(err => sendResponse({ ok: false, error: err.message }));
     return true;
   }

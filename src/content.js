@@ -89,11 +89,6 @@
   // ---------------------------------------------------------------------------
   const FLAG = 'data-savant-done';
 
-  // QS isn't in the player-card modal DOM and can't be computed from it. It IS a column on the roster
-  // list, so we capture name -> QS while scanning the list and reuse it in the modal. Lives for the
-  // SPA session; empty until a pitcher roster table has been scanned.
-  const rosterStats = {}; // normName -> { qs }
-
   function rowPlayer(tr) {
     const nameEl = tr.querySelector(BV.CONFIG.selectors.playerName);
     if (!nameEl) return null;
@@ -163,9 +158,6 @@
         }
       }
     }
-
-    // Capture QS from the pitcher list so the modal can reuse it.
-    if (kind === 'pit') captureRosterQS(scroller, players);
 
     hideResearch(scroller);
 
@@ -247,21 +239,6 @@
     }
   }
 
-  // Find the QS column in a pitcher scroller by its header label, then stash each row's value by name.
-  function captureRosterQS(scroller, players) {
-    const heads = [...scroller.querySelectorAll('thead tr:last-child th')];
-    const qsIdx = heads.findIndex(th => (th.textContent || '').trim() === 'QS');
-    if (qsIdx < 0) return;
-    for (const tr of scroller.querySelectorAll('tbody tr')) {
-      const idx = tr.getAttribute('data-idx');
-      const p = idx != null ? players[idx] : null;
-      if (!p) continue;
-      const cell = tr.children[qsIdx];
-      const v = cell ? (cell.textContent || '').trim() : '';
-      if (v !== '') rosterStats[BV.normName(p.name)] = { qs: v };
-    }
-  }
-
   // OPS = OBP + SLG, formatted like a rate stat (".763" / "1.045"). Inputs are ESPN cell text.
   function opsFmt(obp, slg) {
     const o = BV.num(obp), s = BV.num(slg);
@@ -323,10 +300,11 @@
     } else {
       relabel(headByStat('stat-w'), 'QS');
       headByStat('stat-l')?.classList.add('savant-hidden');
-      const qs = (rosterStats[BV.normName(name)] || {}).qs || '';
+      let seasonW = null;
       for (const tr of bodyRows) {
         const w = tr.querySelector('.stat-w'), l = tr.querySelector('.stat-l');
-        if (w) w.textContent = (tr.getAttribute('data-idx') === '0') ? qs : ''; // QS is a season total
+        // QS is a season total: keep the Season row's W cell (filled async below), blank the others.
+        if (w) { if (tr.getAttribute('data-idx') === '0') seasonW = w; else w.textContent = ''; }
         l?.closest('td')?.classList.add('savant-hidden');
         // Shade ESPN's existing ERA + WHIP cells in place (off by default; user opts in via the popup).
         for (const [cls, key] of [['stat-era', 'era'], ['stat-whip', 'whip']]) {
@@ -335,6 +313,20 @@
           const td = cell.closest('td'), raw = BV.num(cell.textContent);
           td.dataset.savantKey = key; td.dataset.savantVal = Number.isFinite(raw) ? String(raw) : '';
           td.style.backgroundColor = BV.cellColor(PREFS, key, raw);
+        }
+      }
+      // QS isn't a Savant or StatsAPI field - the SW computes it from the pitcher's StatsAPI gameLog
+      // (>=6 IP & <=3 ER per start), keyed by MLBAM id (carried on the hand index). Authoritative
+      // season value, independent of ESPN's list-filter window. Filled async so the modal isn't blocked.
+      if (seasonW) {
+        const pid = hand && hand.id;
+        if (pid) {
+          seasonW.textContent = '…';
+          sendMessage({ type: 'GET_QS', id: pid })
+            .then(r => { seasonW.textContent = (r && r.ok && r.qs != null) ? String(r.qs) : ''; })
+            .catch(() => { seasonW.textContent = ''; });
+        } else {
+          seasonW.textContent = '';
         }
       }
     }

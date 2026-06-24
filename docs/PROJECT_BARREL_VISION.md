@@ -222,9 +222,12 @@ reload.
 hitters, W+L → QS for pitchers — relabel the first, hide the second); and builds a standalone
 **Advanced Stats** table beneath ESPN's Stats table (`buildAdvancedTable()`) with its own section
 title, headers, a single shaded Season row, and a **Savant Page** link (`savant-player/{nameSlug}`) —
-styled with ESPN's Table classes so it reads native. **QS dependency:** QS isn't in the modal DOM and
-can't be computed there, so it's captured from the pitcher roster list (by QS header label) during a
-scan and reused; season-only, blank until a pitcher list has been viewed this session.
+styled with ESPN's Table classes so it reads native. **QS source (v0.9.1):** QS (Quality Starts) is not
+a field on Savant *or* StatsAPI, so the service worker **computes** it from the pitcher's StatsAPI
+gameLog — a start with ≥6 IP and ≤3 ER — keyed by MLBAM id (carried on the hand index), cached per
+pitcher. This replaced the earlier roster-list scrape, which read whatever stat window the list filter
+was on (Season / Last 7 / 15 / 30 / Projected) and could therefore show a non-season value on the card.
+The modal fills the Season-row QS asynchronously (`GET_QS` message) so it isn't blocked.
 
 ---
 
@@ -346,6 +349,16 @@ insufficient.
 
 ## 15. Changelog
 
+- **v0.9.1** —
+  - **QS is now computed from StatsAPI, not scraped from ESPN's list.** The roster-list scrape read the
+    list's current stat-filter window, so a Last-7/15/30/Projected view could surface a non-season QS on
+    the player card. The SW now computes season QS from the pitcher's StatsAPI gameLog (≥6 IP & ≤3 ER per
+    start), keyed by MLBAM id (added to the hand index), cached per pitcher (`GET_QS` message). The
+    `captureRosterQS` scrape and `rosterStats` cache were removed. Index cache bumped to `v2` (hand index
+    now carries `id`).
+  - **Popup polish:** the data button is grey like Reset (was red) and renamed "Refresh data".
+  - **Debug readout** moved to the very bottom-left (`bottom: 10px`; the 48px offset cleared the
+    userscript's gear, which no longer exists in the extension).
 - **v0.9.0 (MV3 port)** —
   - Ported the v0.8.8 userscript to a buildless vanilla Manifest V3 extension.
   - `GM_xmlhttpRequest` → cross-origin fetch in the **service worker** (content scripts can't fetch

@@ -50,8 +50,7 @@ input[type="checkbox"] { width: 15px; height: 15px; cursor: pointer; accent-colo
   background: #fff; color: #333;
 }
 .bv-foot button:hover { background: #f6f6f6; }
-#bv-refresh { background: #d62e2e; color: #fff; border-color: #d62e2e; font-weight: 600; }
-#bv-refresh:hover { background: #c42727; }
+/* Refresh uses the same neutral style as Reset (inherits .bv-foot button). */
 #bv-refresh:disabled { opacity: .6; cursor: default; }
 
 .bv-status { padding: 0 16px 12px; min-height: 16px; color: #4a7; font-size: 12px; }

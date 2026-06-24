@@ -12,7 +12,7 @@
 
 /* Diagnostic HUD (debug readout), bottom-left, clear of ESPN's chat floater. */
 #savant-hud {
-  position: fixed; bottom: 48px; left: 10px; z-index: 99999;
+  position: fixed; bottom: 10px; left: 10px; z-index: 99999;
   font: 12px/1.4 -apple-system, system-ui, sans-serif;
   padding: 6px 10px; border-radius: 6px;
   background: #1d1f23; color: #e6e6e6;
