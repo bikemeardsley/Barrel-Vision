@@ -31,8 +31,9 @@ player-page sliders — the actual stat value with the bar at the player's perce
 ![Barrel Vision Advanced Stats table inside the ESPN player-card modal](docs/images/modal.png)
 
 Everything is driven from the **toolbar popup** — per-column **Show** + **Highlight** toggles and
-thresholds, Pitcher List on/off (master + per-list), a master on/off switch, and a
-weekly Pitcher List refresh. Changes apply live, with no page reload.
+thresholds, top-list ranks on/off (master + per-list), the **starters rank source** (Pitcher List /
+Razzball / RotoBaller), a master on/off switch, and a weekly rank refresh. Changes apply live, with no
+page reload.
 
 <p align="center">
   <img src="docs/images/popup.png" width="380" alt="Barrel Vision toolbar popup: master on/off switch and per-column threshold controls for hitters and pitchers">
@@ -55,10 +56,12 @@ It also:
   good platoon edge vs an ace lands as even; the pitcher's hand shows in the STATUS cell as `(Drohan • L)`. **Pitchers** get the **opponent-offense rank** badge (`MIL 24`), shown only when
   they're starting (the PP badge) or are a reliever. Read off ESPN's own opponent/probable cell — no
   schedule API.
-- Surfaces **Pitcher List weekly ranks** inline after a player's handedness as **"• PL #N"** — SP rank
-  from "The List" (Top 100) or closer rank from the reliever ranks for pitchers, and the **"Top 150
-  Hitters"** rank for batters, with the source list + tier in the tooltip. In the player card the badge
-  links to the player's Pitcher List page.
+- Surfaces **weekly top-list ranks** inline after a player's handedness as **"• PL #N"** (or **"• RZ #N"**
+  / **"• RB #N"**), with the source + tier in the tooltip. The **starters (SP)** source is selectable in
+  the popup — **Pitcher List**, **Razzball**, or **RotoBaller**; **closers and batters always come from
+  Pitcher List** (the only source that ranks them). In the player card the badge links back to the source:
+  Pitcher List and RotoBaller to the player's page, Razzball (which has no player pages) to that week's
+  Top-100 article.
 - In the player card, **condenses** columns (OBP+SLG → OPS, W+L → QS) and adds an **Advanced Stats**
   table plus a **Savant Page** link. **QS (Quality Starts)** is computed from the pitcher's StatsAPI
   game log (≥6 IP & ≤3 ER per start), so it's the true season value — not whatever ESPN's stat-filter
@@ -154,8 +157,9 @@ Nothing from your ESPN session is read, stored, or sent anywhere. Full details i
 ## Data sources & verified quirks
 
 Six public Baseball Savant CSV leaderboards (the five contact-quality feeds plus the percentile-rankings
-feed behind the player-card sliders), the MLB StatsAPI (roster + per-pitcher game logs), and the three
-public Pitcher List weekly ranking articles (SP, closers, batters). Headers were verified against the
+feed behind the player-card sliders), the MLB StatsAPI (roster + per-pitcher game logs), and public
+weekly ranking articles — closers + batters from Pitcher List, and starters from your choice of Pitcher
+List, Razzball, or RotoBaller. Headers were verified against the
 live feeds (2026
 in-season). Three counterintuitive quirks are handled deliberately and annotated in the code so they
 don't get "corrected" later:
@@ -168,10 +172,12 @@ don't get "corrected" later:
 - **Quality Starts aren't a Savant or StatsAPI field** — they're computed from each pitcher's StatsAPI
   game log (≥6 IP & ≤3 ER per start), the only authoritative season source.
 
-Pitcher List publishes its ranks as weekly *articles* (no API), but each ranking is a clean,
-server-rendered `<table class="list">` — so the worker fetches and regex-parses just the rank, name,
-slug, team, and tier (never the prose write-ups), with a weekly cache and a manual-paste fallback in the
-popup. See [`docs/PROJECT_BARREL_VISION.md` §5](docs/PROJECT_BARREL_VISION.md) for the full table.
+These sites publish their ranks as weekly *articles* (no API), but each ranking is a server-rendered HTML
+table — so the worker resolves the latest week's article via the category RSS feed and regex-parses just
+the rank, name, slug, team, and tier (never the prose write-ups), with a weekly cache and a manual-paste
+fallback in the popup. Razzball and RotoBaller each print a smaller decoy table on the page, so their
+parsers pick the ranking table by row / player-link count rather than "the first table". See
+[`docs/PROJECT_BARREL_VISION.md` §5](docs/PROJECT_BARREL_VISION.md) for the full table.
 
 ---
 

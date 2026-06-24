@@ -207,23 +207,48 @@
     });
   }
 
+  // Starters rank source (Pitcher List / Razzball / RotoBaller). Closers + batters always stay Pitcher
+  // List. Persisted to sync (STORAGE.spSource; read by the SW's getPL). Options come from the registry so
+  // adding a source needs no popup change. Switching triggers a PL-only refresh (the SW treats a source
+  // change as a cache miss and refetches the new source); open ESPN tabs adopt the rebuilt index live.
+  let SP_SOURCE = BV.CONFIG.spSourceDefault;
+  const spSel = document.getElementById('bv-sp-source');
+  for (const s of BV.spSourceList()) {
+    const opt = document.createElement('option');
+    opt.value = s.id; opt.textContent = s.label;
+    spSel.appendChild(opt);
+  }
+  const spLabel = () => BV.spSourceCfg(SP_SOURCE).label;
+  function applySpSourceLabel() {
+    document.getElementById('bv-pl-sp-lab').textContent = `Override — starters (${spLabel()})`;
+  }
+  spSel.addEventListener('change', e => {
+    SP_SOURCE = BV.validSpSource(e.target.value) ? e.target.value : BV.CONFIG.spSourceDefault;
+    chrome.storage.sync.set({ [BV.STORAGE.spSource]: SP_SOURCE });
+    applySpSourceLabel();
+    setStatus(`Switching starters to ${spLabel()}…`);
+    // force:false: the SW honors an override saved for this source, else refetches it (source = cache miss).
+    refreshPl({ type: 'REFRESH_PL', force: false }, `Starters: ${spLabel()}`, spSel);
+  });
+
   async function refreshPl(msg, label, btn) {
     if (btn) btn.disabled = true;
     try {
       const resp = await sendMessage(msg);
       if (resp && resp.ok) {
         const c = resp.counts || {};
-        setStatus(`${label} — ${c.plSp || 0} SP · ${c.plRp || 0} closers · ${c.plHit || 0} batters ranked.`);
+        const src = BV.spSourceCfg(c.plSpSrc || SP_SOURCE).label;
+        setStatus(`${label} — ${c.plSp || 0} SP (${src}) · ${c.plRp || 0} closers · ${c.plHit || 0} batters ranked.`);
       } else {
-        setStatus('Pitcher List refresh failed: ' + ((resp && resp.error) || 'unknown error'));
+        setStatus('Rank refresh failed: ' + ((resp && resp.error) || 'unknown error'));
       }
-    } catch (e) { setStatus('Pitcher List refresh failed: ' + e.message); }
+    } catch (e) { setStatus('Rank refresh failed: ' + e.message); }
     finally { if (btn) btn.disabled = false; }
   }
 
   document.getElementById('bv-pl-fetch').addEventListener('click', e => {
-    setStatus('Fetching latest Pitcher List ranks…');
-    refreshPl({ type: 'REFRESH_PL', force: true }, 'Pitcher List refreshed', e.currentTarget);
+    setStatus(`Fetching latest ranks (${spLabel()} starters)…`);
+    refreshPl({ type: 'REFRESH_PL', force: true }, 'Ranks refreshed', e.currentTarget);
   });
 
   document.getElementById('bv-pl-save').addEventListener('click', async e => {
@@ -233,7 +258,9 @@
     const hit = document.getElementById('bv-pl-hit').value.trim();
     if (!sp && !rp && !hit) { setStatus('Paste at least one list, or use Fetch latest ranks to pull from the web.'); return; }
     setStatus('Saving override…');
-    try { await chrome.storage.local.set({ [plOverrideKey()]: { sp, rp, hit, ts: Date.now() } }); } catch (_) {}
+    // spSrc tags the starters paste with the selected source: the SW applies it only while that source is
+    // selected (rp/hit are always Pitcher List, so they apply regardless).
+    try { await chrome.storage.local.set({ [plOverrideKey()]: { sp, rp, hit, spSrc: SP_SOURCE, ts: Date.now() } }); } catch (_) {}
     // force:false so the SW honors the override we just saved (this week only; auto-fetch resumes after).
     refreshPl({ type: 'REFRESH_PL', force: false }, 'Override saved (this week)', btn);
   });
@@ -254,7 +281,7 @@
   (async () => {
     document.getElementById('bv-ver').textContent = 'v' + chrome.runtime.getManifest().version;
     try {
-      const obj = await chrome.storage.sync.get([BV.STORAGE.prefs, BV.STORAGE.plPrefs, BV.STORAGE.debug, BV.STORAGE.enabled]);
+      const obj = await chrome.storage.sync.get([BV.STORAGE.prefs, BV.STORAGE.plPrefs, BV.STORAGE.debug, BV.STORAGE.enabled, BV.STORAGE.spSource]);
       PREFS = mergePrefs(obj[BV.STORAGE.prefs]);
       document.getElementById('bv-debug').checked = obj[BV.STORAGE.debug] === true;
       const on = obj[BV.STORAGE.enabled] !== false;            // default on
@@ -265,6 +292,9 @@
       document.getElementById('bv-pl-on-sp').checked = PL_PREFS.sp !== false;
       document.getElementById('bv-pl-on-rp').checked = PL_PREFS.rp !== false;
       document.getElementById('bv-pl-on-hit').checked = PL_PREFS.h !== false;
+      SP_SOURCE = BV.validSpSource(obj[BV.STORAGE.spSource]) ? obj[BV.STORAGE.spSource] : BV.CONFIG.spSourceDefault;
+      spSel.value = SP_SOURCE;
+      applySpSourceLabel();
       applyPlBody();
     } catch (_) { /* defaults already set */ }
     try {

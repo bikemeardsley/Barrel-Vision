@@ -48,18 +48,25 @@
 
   <div class="bv-status" id="bv-status" role="status" aria-live="polite"></div>
 
-  <!-- Pitcher List ranks. The master toggle shows/hides the inline "• PL #N" badges (and this section's
-       body). FUTURE: the title could become a dropdown of rank sources (Pitcher List, RotoBaller, …). -->
+  <!-- Top-list ranks. The master toggle shows/hides the inline rank badges ("• PL #N" / "• RZ #N" /
+       "• RB #N") and this section's body. The "Starters from" dropdown picks the SP rank source; closers
+       and batters are always Pitcher List (the only source that ranks them). -->
   <div class="bv-pl">
     <div class="bv-pl-head">
-      <span class="bv-pl-title">Pitcher List ranks</span>
-      <span class="bv-master" title="Show Pitcher List ranks on players">
+      <span class="bv-pl-title">Top-list ranks</span>
+      <span class="bv-master" title="Show top-list ranks on players">
         <span class="bv-master-lab" id="bv-pl-on-lab">On</span>
-        <label class="bv-switch"><input type="checkbox" id="bv-pl-on" checked aria-label="Show Pitcher List ranks"><span class="bv-slider"></span></label>
+        <label class="bv-switch"><input type="checkbox" id="bv-pl-on" checked aria-label="Show top-list ranks"><span class="bv-slider"></span></label>
       </span>
     </div>
 
     <div class="bv-pl-body" id="bv-pl-body">
+      <!-- Starters rank source. Closers + batters always come from Pitcher List; options are populated
+           from BV.spSourceList() in popup.js. -->
+      <label class="bv-pl-source" for="bv-sp-source">Starters from
+        <select id="bv-sp-source"></select>
+      </label>
+
       <!-- Per-list toggles. A list shows only when the master toggle AND its own toggle are on. -->
       <div class="bv-pl-lists">
         <label class="bv-pl-list"><span class="bv-switch"><input type="checkbox" id="bv-pl-on-sp" checked><span class="bv-slider"></span></span> Starters</label>
@@ -68,16 +75,17 @@
       </div>
 
       <p class="bv-pl-note">
-        Ranks are fetched automatically each week. <b>Fetch latest ranks</b> pulls them now (e.g. right
-        after a new list drops). If a week fails to parse (e.g. they change their page), paste the rankings
-        below as a fallback — the article's list or simple lines like <code>1 Player Name</code> — and
-        <b>Save</b>. A pasted override applies for that week only; auto-fetch then resumes. <b>Clear</b>
-        drops it and re-fetches now.
+        Starters come from the source above; closers and batters are always Pitcher List. Ranks are
+        fetched automatically each week — <b>Fetch latest ranks</b> pulls them now (e.g. right after a new
+        list drops). If a week fails to parse (e.g. a site changes its page), paste the rankings below as a
+        fallback — the article's list or simple lines like <code>1 Player Name</code> — and <b>Save</b>. A
+        pasted starters override applies to the selected source for that week only; auto-fetch then resumes.
+        <b>Clear</b> drops it and re-fetches now.
       </p>
       <div class="bv-pl-fetchrow">
         <button type="button" id="bv-pl-fetch">Fetch latest ranks</button>
       </div>
-      <label class="bv-pl-lab" for="bv-pl-sp">Override — starters ("The List")</label>
+      <label class="bv-pl-lab" for="bv-pl-sp" id="bv-pl-sp-lab">Override — starters (Pitcher List)</label>
       <textarea id="bv-pl-sp" class="bv-pl-ta" rows="4" placeholder="1 Jacob Misiorowski&#10;2 Paul Skenes&#10;3 Cristopher Sánchez&#10;…"></textarea>
       <label class="bv-pl-lab" for="bv-pl-rp">Override — closers (saves)</label>
       <textarea id="bv-pl-rp" class="bv-pl-ta" rows="4" placeholder="1 Mason Miller&#10;2 Jhoan Duran&#10;3 Josh Hader&#10;…"></textarea>

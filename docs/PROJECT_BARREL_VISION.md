@@ -88,12 +88,27 @@ Those need stored, joined, multi-season data and belong in a heavier build if ev
   only the raw HTML showed the true structure, so verify against `curl`, not a summarizer. Two
   brittleness guards: a **graceful skip** (a short parse → render nothing, never wrong ranks) and a
   **manual-paste override** in the popup (Path B) for any week the markup changes.
-- **PL data is a flat `pl` index, not a `pit` column.** Like `hand`, the PL ranks are a flat
-  `normName → { sp?, rp?, slug, tier, team }` map read directly by the content script and rendered
-  *inline after handedness* — not a shaded table column. This also keeps it off the CSV `mergeFeeds`
-  path, whose `/^\s*</` guard would (correctly) reject HTML. Weekly (7-day) cache, mirroring the
-  per-pitcher QS cache. **Only factual rank+name+team+tier are taken — never the prose write-ups**
-  (those stay on PL's site; the modal links back to `…/player/{slug}/` for attribution + traffic).
+- **PL data is a flat `pl` index, not a `pit` column.** Like `hand`, the ranks are a flat
+  `normName → { sp?, spSrc?, spSlug?, spTier?, spListUrl?, rp?, h?, slug, tier, team }` map read directly by the
+  content script and rendered *inline after handedness* — not a shaded table column. This also keeps it
+  off the CSV `mergeFeeds` path, whose `/^\s*</` guard would (correctly) reject HTML. Weekly (7-day)
+  cache, mirroring the per-pitcher QS cache. **Only factual rank+name+team+tier are taken — never the
+  prose write-ups** (those stay on each site; the modal links back to the source's player page for
+  attribution + traffic).
+- **Starters source is selectable (Pitcher List / Razzball / RotoBaller) (v0.15.0).** The SP rank can
+  come from any of three weekly lists; **closers + hitters stay Pitcher List** (the others publish
+  starters only). Each source is one entry in `CONFIG.spSources` — plain data: feed/index URLs, an
+  `articleRe` *string* the SW rebuilds with `new RegExp`, a `minRows` trust floor, a parser id, and a
+  `{slug}` `playerUrl` template (or `null`). Razzball + RotoBaller were verified the same way (raw `curl`,
+  not a summarizer): Razzball's ranking is the **largest plain `<table>`** of rank|name|team|notes (a
+  ~20-row "Pitching WAR" chart is the decoy; names are unlinked → no per-player URL), RotoBaller's is the
+  table with the **most player links** (`a.rbPlayer` → `/mlb/player/{id}/{name}`; a "prospects to stash"
+  table is the decoy). The SP entry is source-tagged (`spSrc`/`spSlug`/`spTier`) so the badge labels it
+  `PL`/`RZ`/`RB` and links back per source. `STORAGE.spSource` (sync) holds the choice; the weekly cache
+  (`plKey` v2) records its `src`, so switching source is a cache miss that refetches rather than serving
+  the other source's ranks. Same facts-only rule applies to every source.
+- **Prebuilt extensions evaluated and rejected.** The Chrome Web Store "ESPN Fantasy Baseball Advanced
+  Statistics" lacks barrel rate; "FantasyLink" injects *links*, not metric columns. Net: DIY.
 - **Prebuilt extensions evaluated and rejected.** The Chrome Web Store "ESPN Fantasy Baseball Advanced
   Statistics" lacks barrel rate; "FantasyLink" injects *links*, not metric columns. Net: DIY.
 
@@ -193,7 +208,8 @@ text). Headers below are the *actual* headers (re-verified live 2026, `min=10`).
 | Exit Velocity (pitcher) | `…/leaderboard/statcast?type=pitcher&…&min={MIN}&csv=true` | same as batter EV, now contact **allowed** |
 | Expected Statistics (pitcher) | `…/leaderboard/expected_statistics?type=pitcher&…&min={MIN}&csv=true` | batter columns **plus** `era`, `xera`, `era_minus_xera_diff` |
 | Handedness | `statsapi.mlb.com/api/v1/sports/1/players?season={Y}` (JSON) | `fullName`, `batSide.code`, `pitchHand.code` (L/R/S), `primaryPosition`, `nameSlug` |
-| Pitcher List ranks | weekly **article** on `pitcherlist.com`, latest URL via category **RSS** (`…/the-list/feed/`, `…/reliever-ranks/feed/`) | first `<table class="list">`: `td.rank`, `td.name>a` (name + `/player/{slug}/`), `td.team`, `span.tier` |
+| Starters (SP) ranks — **selectable source** | weekly **article**, latest URL via category **RSS**: PL `…/the-list/feed/`, Razzball `…/top-100-starting-pitchers/feed/`, RotoBaller `…/mlb-rankings/feed` | PL: `<table class="list">` (`td.rank`/`td.name>a` `…/player/{slug}/`/`td.team`/`span.tier`). Razzball: **largest** plain `<table>` (rank·name·team; names unlinked → badge links to the week's article). RotoBaller: table with **most** `a.rbPlayer` links (rank·tier·name → `/mlb/player/{id}/{name}`) |
+| Closers + hitters ranks (always Pitcher List) | weekly **article** via category **RSS** (`…/reliever-ranks/feed/`, `…/hitter-list/feed/`) | first `<table class="list">`: `td.rank`, `td.name>a`, `td.team`, `span.tier` |
 
 The pitcher feeds key on `player_id` and carry **no handedness column** — throwing hand needs StatsAPI.
 There is no pitcher equivalent of the bat-tracking feed, so pitchers get no BatSpd/SqUp%.
@@ -205,6 +221,10 @@ The SW resolves the newest article via the RSS feed, then **regex-parses** the f
 `DOMParser` in a classic worker), carrying the tier forward (PL labels only each tier's leading row).
 Joined by `normName`. Best-effort with a graceful skip + a popup manual-paste fallback; weekly (7-day)
 cache. **Extraction is minimal by design — ranks/names/teams/tiers only, never the prose write-ups.**
+The **starters (SP)** list is now selectable (Pitcher List / Razzball / RotoBaller; closers + hitters stay
+PL); each was verified the same way against raw HTML, and each ranking page carries a smaller **decoy**
+table the parser must skip — so the Razzball/RotoBaller parsers pick the ranking table by **row count /
+player-link count**, not "the first table". See §2 and `CONFIG.spSources`.
 
 ### Verified data quirks — DO NOT "fix" these
 
@@ -382,6 +402,26 @@ insufficient.
 
 ## 15. Changelog
 
+- **v0.15.0 (selectable starters rank source: Pitcher List / Razzball / RotoBaller)** —
+  - **New "Starters from" dropdown** in the popup's rank section picks the SP rank source. **Closers and
+    batters always stay Pitcher List** (the other two sites rank starters only). Stored in
+    `STORAGE.spSource` (sync, default `pitcherList`); the badge shows the source — `PL #N` / `RZ #N` /
+    `RB #N` — with the full source named in the tooltip and the rank linking back to that source.
+    Pitcher List + RotoBaller link to the player's page; **Razzball has no player pages, so its badge
+    links to that week's Top-100 article** (the resolved list URL, carried on the record as `spListUrl`).
+  - **Generalized the fetch/parse pipeline, didn't fork it.** `CONFIG.spSources` is a plain-data registry
+    (feed/index, `articleRe` string, `minRows`, parser id, `{slug}` `playerUrl`); `fetchPlList → fetchList`
+    takes a site parser and returns `{ rows, url }`; `getPL` fetches SP from the selected source and
+    closers/hitters from PL as before. The Razzball/RotoBaller parsers pick the **ranking table by size /
+    player-link count** (each page carries a smaller decoy table — Razzball a 20-row "Pitching WAR" chart,
+    RotoBaller a "prospects to stash" table) and were verified live against raw HTML (Razzball 100 SP,
+    RotoBaller 101 SP), per the "`curl`, not a summarizer" rule.
+  - **Cache + override are source-aware.** The weekly cache (`plKey` **v1 → v2**) records its `src`, so a
+    source switch is a cache miss → refetch (never the other source's stale ranks); a pasted starters
+    override carries `spSrc` and applies only while that source is selected (rp/hit pastes are always PL).
+    Index cache **v5 → v6** (the SP entry gains `spSrc`/`spSlug`/`spTier`/`spListUrl`).
+  - **Manifest:** host permissions added for `razzball.com` + `www.rotoballer.com` (the new hosts trigger
+    a one-time re-enable prompt on update); version **0.14.0 → 0.15.0**.
 - **v0.14.0 (pitcher matchup: park-neutral wOBA + z-score colour + day's park)** — reworked the **pitcher**
   side of the matchup ratings per the methodology review (batter side unchanged):
   - **Base metric OPS → self-computed team wOBA.** Team wOBA is computed in the SW from the StatsAPI
@@ -452,7 +492,7 @@ insufficient.
     if master AND its own flag are on. The popup's PL section is no longer a `<details>` — a header with the
     master toggle, and a body (per-list toggles + override) that hides when the master is off. Content
     reacts live (`rebuildPlBadges`). **Future:** the title could become a dropdown of rank sources
-    (Pitcher List, RotoBaller, …).
+    (Pitcher List, RotoBaller, …). *(Done in v0.15.0 — a "Starters from" dropdown selects the SP source.)*
   - **Per-column Show vs Highlight + handedness toggles.** Each column pref now has `show` (is the column
     displayed) in addition to `enabled` (is it highlighted — unchanged, so saved prefs migrate for free).
     Popup columns: **Show** (ESPN's OPS/ERA/WHIP are read-only on — we never add/remove ESPN's own columns)

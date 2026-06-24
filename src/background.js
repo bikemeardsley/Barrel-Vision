@@ -197,6 +197,7 @@ function countsOf(indexes) {
     plSp: plVals.filter(v => v && v.sp != null).length,
     plRp: plVals.filter(v => v && v.rp != null).length,
     plHit: plVals.filter(v => v && v.h != null).length,
+    plSpSrc: (plVals.find(v => v && v.sp != null && v.spSrc) || {}).spSrc || BV.CONFIG.spSourceDefault,
   };
 }
 
@@ -359,6 +360,59 @@ function parsePlText(text) {
   return out;
 }
 
+// Razzball "Top 100 Starting Pitchers": the ranking is a plain <table> (no class) of rank|name|team|notes
+// rows. The author also prints a smaller "Pitching WAR" chart sharing the same first three columns, so we
+// scan ALL tables and keep the LARGEST by row count (verified live 2026: ranking = 100 rows, WAR chart =
+// 20). Names are plain text (no per-player link in the ranking table), so slug stays ''. Only
+// rank+name+team are taken - never the NOTES write-ups. Returns [{rank,name,slug:'',team,tier:''}].
+function tagText(s) { return decodeEntities((s || '').replace(/<[^>]*>/g, ' ').replace(/\s+/g, ' ').trim()); }
+function parseRazzballList(html) {
+  let best = [];
+  const tableRe = /<table[^>]*>([\s\S]*?)<\/table>/g;
+  let t;
+  while ((t = tableRe.exec(html || '')) !== null) {
+    const rows = [];
+    for (const seg of t[1].split('<tr')) {
+      const cells = [];
+      const cellRe = /<td[^>]*>([\s\S]*?)<\/td>/g;
+      let c;
+      while ((c = cellRe.exec(seg)) !== null) cells.push(tagText(c[1]));
+      if (cells.length < 3 || !/^\d+$/.test(cells[0]) || !cells[1]) continue;   // header / non-rank rows
+      rows.push({ rank: +cells[0], name: cells[1], slug: '', team: cells[2].toUpperCase(), tier: '' });
+    }
+    if (rows.length > best.length) best = rows;
+  }
+  return best;
+}
+
+// RotoBaller "SP Rankings for Week N": the ranking is the table with the MOST player links (rank | tier |
+// <a class="rbPlayer" href="/mlb/player/{id}/{name}">Name</a> | …). A small "prospects to stash" table is
+// the decoy, so we keep the table with the most rbPlayer rows. We take rank + name + the player href (the
+// slug for the player link), never the $/PV/Trend columns; there is no team column on this table -> team
+// ''. Returns [{rank,name,slug,team:'',tier:''}] (slug = the captured /mlb/player/… path).
+function parseRotoList(html) {
+  let best = [];
+  const tableRe = /<table[^>]*>([\s\S]*?)<\/table>/g;
+  let t;
+  while ((t = tableRe.exec(html || '')) !== null) {
+    const rows = [];
+    for (const seg of t[1].split('<tr')) {
+      const a = seg.match(/<a[^>]*class="[^"]*rbPlayer[^"]*"[^>]*href="([^"]+)"[^>]*>([\s\S]*?)<\/a>/);
+      if (!a) continue;
+      const rankM = seg.match(/<td[^>]*>\s*(\d+)\s*<\/td>/);   // first pure-integer cell = rank (tier is 2nd)
+      if (!rankM) continue;
+      const name = tagText(a[2]);
+      if (!name) continue;
+      rows.push({ rank: +rankM[1], name, slug: a[1], team: '', tier: '' });
+    }
+    if (rows.length > best.length) best = rows;
+  }
+  return best;
+}
+
+// SP-list parser dispatch (keyed by CONFIG.spSources[id].parser). Closers + hitters always use parsePlList.
+const SP_PARSERS = { pl: parsePlList, razzball: parseRazzballList, roto: parseRotoList };
+
 // Resolve the latest weekly article URL. RSS first (reverse-chronological: the first article-shaped
 // <link> is the newest week); the category HTML index is the fallback if the feed shape changes.
 async function latestArticleUrl(feedUrl, indexUrl, articleRe) {
@@ -373,26 +427,41 @@ async function latestArticleUrl(feedUrl, indexUrl, articleRe) {
   return m[0];
 }
 
-// Fetch + parse one weekly list. Graceful skip: a short parse (markup changed) returns [] so we
-// render NO rank rather than wrong/partial ranks.
-async function fetchPlList(feedUrl, indexUrl, articleRe, minRows, label) {
+// Fetch + parse one weekly list with the given site parser. Graceful skip: a short parse (markup
+// changed, or the source is JS-gated and the table isn't in the raw HTML) returns [] so we render NO
+// rank rather than wrong/partial ranks. `parser` defaults to the Pitcher List table parser.
+async function fetchList(feedUrl, indexUrl, articleRe, minRows, label, parser) {
+  const parse = parser || parsePlList;
   let url;
   try { url = await latestArticleUrl(feedUrl, indexUrl, articleRe); }
-  catch (e) { console.warn(`[Barrel Vision] PL ${label} URL resolve failed: ${e.message}`); return []; }
+  catch (e) { console.warn(`[Barrel Vision] ${label} URL resolve failed: ${e.message}`); return { rows: [], url: '' }; }
   let html;
   try { html = await fetchText(url); }
-  catch (e) { console.warn(`[Barrel Vision] PL ${label} article fetch failed: ${e.message}`); return []; }
-  const rows = parsePlList(html);
+  catch (e) { console.warn(`[Barrel Vision] ${label} article fetch failed: ${e.message}`); return { rows: [], url }; }
+  const rows = parse(html);
   if (rows.length < minRows) {
-    console.warn(`[Barrel Vision] PL ${label} parse yielded ${rows.length} rows (< ${minRows}) - skipping`);
-    return [];
+    console.warn(`[Barrel Vision] ${label} parse yielded ${rows.length} rows (< ${minRows}) - skipping`);
+    return { rows: [], url };
   }
-  return rows;
+  return { rows, url };   // url = the resolved weekly article (used as the badge link for sources with no player page)
 }
 
-// Merge SP + closer + hitter rows into a flat normName -> { sp?, rp?, h?, slug, tier, team } map.
-function buildPlMap(spRows, rpRows, hitRows) {
+// Merge SP + closer + hitter rows into a flat normName -> record map. The SP entry is tagged with its
+// source (spSrc/spSlug/spTier) so the badge can label + link it; closers + hitters are always Pitcher
+// List (rp/h + the generic slug/tier/team). When the SP source IS Pitcher List, the SP slug/tier also
+// populate the generic slug/tier (byte-identical to the pre-multi-source behaviour for PL pitchers).
+function buildPlMap(spRows, rpRows, hitRows, srcId, spListUrl) {
   const pl = {};
+  const isPL = srcId === 'pitcherList';
+  for (const r of spRows || []) {
+    const k = BV.normName(r.name);
+    if (!k || r.rank == null) continue;
+    const cur = pl[k] || {};
+    pl[k] = { ...cur, sp: r.rank, spSrc: srcId, spSlug: r.slug || '', spTier: isPL ? (r.tier || '') : '',
+      spListUrl: spListUrl || '',   // fallback badge link (this week's list article) for player-page-less sources
+      slug: cur.slug || (isPL ? (r.slug || '') : ''), tier: cur.tier || (isPL ? (r.tier || '') : ''),
+      team: cur.team || r.team || '' };
+  }
   const add = (rows, key) => {
     for (const r of rows || []) {
       const k = BV.normName(r.name);
@@ -401,10 +470,18 @@ function buildPlMap(spRows, rpRows, hitRows) {
       pl[k] = { ...cur, [key]: r.rank, slug: cur.slug || r.slug || '', tier: cur.tier || r.tier || '', team: cur.team || r.team || '' };
     }
   };
-  add(spRows, 'sp');
   add(rpRows, 'rp');
   add(hitRows, 'h');     // hitter rank from the "Top 150 Hitters" list (shown on batter rows)
   return pl;
+}
+
+// The selected starting-pitcher rank source id (sync; validated, defaults to Pitcher List).
+async function getSelectedSpSource() {
+  try {
+    const id = (await chrome.storage.sync.get(BV.STORAGE.spSource))[BV.STORAGE.spSource];
+    if (BV.validSpSource(id)) return id;
+  } catch (_) {}
+  return BV.CONFIG.spSourceDefault;
 }
 
 async function getPL(force) {
@@ -412,37 +489,47 @@ async function getPL(force) {
   const overKey = BV.STORAGE.plOverride(Y);
   const cacheK = BV.STORAGE.plKey(Y);
   const ttl = BV.CONFIG.plCacheTtlDays * 86400e3;
+  const srcId = await getSelectedSpSource();
+  const src = BV.spSourceCfg(srcId);
 
-  // `force` (the manual "Refresh Pitcher List" button / Clear) pulls live data, bypassing BOTH the
-  // override and the weekly cache. A normal/advanced rebuild (force=false) prefers a fresh override,
-  // then a fresh weekly cache, then a live fetch.
+  // `force` (the manual "Refresh" button / Clear) pulls live data, bypassing BOTH the override and the
+  // weekly cache. A normal/advanced rebuild (force=false) prefers a fresh override, then a fresh weekly
+  // cache built for the SELECTED source, then a live fetch.
   if (!force) {
-    // 1) Manual override (Path B) - honored for ONE WEEK from when it was saved, then auto-fetch
-    //    resumes on its own (no Clear needed): the paste is treated as "this week only".
+    // 1) Manual override (Path B) - honored for ONE WEEK from when it was saved. The starters paste
+    //    applies only when it was saved for the currently-selected source; closers + hitters are always
+    //    Pitcher List, so an rp/hit paste always applies. Treated as "this week only" (auto-fetch resumes).
     try {
       const o = (await chrome.storage.local.get(overKey))[overKey];
-      if (o && (o.sp || o.rp || o.hit) && (Date.now() - (o.ts || 0)) < ttl) {
-        const sp = o.sp ? parsePlText(o.sp) : [];
-        const rp = o.rp ? parsePlText(o.rp) : [];
+      if (o && (Date.now() - (o.ts || 0)) < ttl) {
+        const sp  = (o.sp && (o.spSrc || 'pitcherList') === srcId) ? parsePlText(o.sp) : [];
+        const rp  = o.rp  ? parsePlText(o.rp)  : [];
         const hit = o.hit ? parsePlText(o.hit) : [];
-        if (sp.length || rp.length || hit.length) return buildPlMap(sp, rp, hit);
+        // A pasted list has no per-player slug; for a player-page-less source (Razzball) link the badge
+        // to that source's category page (latest list at the top) so it's still clickable.
+        if (sp.length || rp.length || hit.length) return buildPlMap(sp, rp, hit, srcId, src.playerUrl ? '' : src.spIndex);
       }
     } catch (_) {}
 
-    // 2) Weekly cache (7-day TTL).
+    // 2) Weekly cache (7-day TTL) - only when it was built for the selected source (a source switch is a
+    //    cache miss, so it refetches rather than serving the other source's ranks).
     try {
       const c = (await chrome.storage.local.get(cacheK))[cacheK];
-      if (c && (Date.now() - c.ts) < ttl) return c.pl || {};
+      if (c && c.src === srcId && (Date.now() - c.ts) < ttl) return c.pl || {};
     } catch (_) {}
   }
 
-  // 3) Fetch + parse this week's articles.
+  // 3) Fetch + parse this week's articles. Starters from the selected source; closers + hitters from PL.
   const P = BV.CONFIG.pitcherList;
-  const spRows  = await fetchPlList(P.spFeed,  P.spIndex,  /https:\/\/pitcherlist\.com\/top-100-starting-pitchers[a-z0-9-]*\//i, 50, 'SP');
-  const rpRows  = await fetchPlList(P.rpFeed,  P.rpIndex,  /https:\/\/pitcherlist\.com\/fantasy-reliever-rankings[a-z0-9-]*\//i, 20, 'closers');
-  const hitRows = await fetchPlList(P.hitFeed, P.hitIndex, /https:\/\/pitcherlist\.com\/top-150-hitters-for-fantasy-baseball[a-z0-9-]*\//i, 50, 'batters');
-  const pl = buildPlMap(spRows, rpRows, hitRows);
-  try { await chrome.storage.local.set({ [cacheK]: { ts: Date.now(), pl } }); } catch (_) {}
+  const spRe = new RegExp(src.articleRe, src.articleReFlags || 'i');
+  const spRes  = await fetchList(src.spFeed, src.spIndex, spRe, src.minRows, `SP (${src.label})`, SP_PARSERS[src.parser] || parsePlList);
+  const rpRes  = await fetchList(P.rpFeed,  P.rpIndex,  /https:\/\/pitcherlist\.com\/fantasy-reliever-rankings[a-z0-9-]*\//i, 20, 'PL closers', parsePlList);
+  const hitRes = await fetchList(P.hitFeed, P.hitIndex, /https:\/\/pitcherlist\.com\/top-150-hitters-for-fantasy-baseball[a-z0-9-]*\//i, 50, 'PL batters', parsePlList);
+  // When the SP source has no per-player page (e.g. Razzball), link its badges to THIS week's resolved
+  // list article instead of a player page; sources with a playerUrl (PL, RotoBaller) link per-player.
+  const spListUrl = src.playerUrl ? '' : (spRes.url || '');
+  const pl = buildPlMap(spRes.rows, rpRes.rows, hitRes.rows, srcId, spListUrl);
+  try { await chrome.storage.local.set({ [cacheK]: { ts: Date.now(), src: srcId, pl } }); } catch (_) {}
   return pl;
 }
 

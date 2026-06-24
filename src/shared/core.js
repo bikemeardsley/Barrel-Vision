@@ -172,22 +172,58 @@
     // list was filtered to Last 7/15/30/Projected).
     mlbStatsGameLog: (id, year) => `https://statsapi.mlb.com/api/v1/people/${id}/stats?stats=gameLog&group=pitching&season=${year}&gameType=R`,
 
-    // Pitcher List weekly rankings - SP "The List" (Top 100), reliever "Top 50 Closers", and the
-    // "Top 150 Hitters" list. Published as weekly ARTICLES (no API), but each ranking is a clean,
-    // server-rendered <table class="list"> (verified live 2026: td.rank / td.name>a / td.team /
-    // span.tier - the hitter list uses the SAME markup, so one parser handles all three). We resolve the
-    // latest week's article via the category RSS feed (newest <link> first; the category HTML index is
-    // the fallback if the feed shape changes), then regex-parse the FIRST list table. Only factual
+    // Closers + hitters ALWAYS come from Pitcher List (the selectable SP sources below publish STARTERS
+    // only): reliever "Top 50 Closers" and the "Top 150 Hitters" list. Weekly ARTICLES (no API), each a
+    // clean server-rendered <table class="list"> (verified live 2026: td.rank / td.name>a / td.team /
+    // span.tier - one parser handles both). The latest week's article is resolved via the category RSS
+    // feed (newest <link> first; the category HTML index is the fallback). Only factual
     // rank+name+slug+team+tier are taken - never the prose write-ups (those stay on PL's site; see
-    // PROJECT doc §5/§2). Parsing + the article-URL regexes live in background.js.
+    // PROJECT doc §5/§2). Parsing lives in background.js. (The SP "The List" feed/index live in
+    // spSources.pitcherList below - SP is the one list that can come from a different source.)
     pitcherList: {
-      spFeed:   'https://pitcherlist.com/category/fantasy/starting-pitchers/the-list/feed/',
       rpFeed:   'https://pitcherlist.com/category/fantasy/relief-pitchers/reliever-ranks/feed/',
       hitFeed:  'https://pitcherlist.com/category/fantasy/hitters-fantasy/hitter-list/feed/',
-      spIndex:  'https://pitcherlist.com/category/fantasy/starting-pitchers/the-list/',
       rpIndex:  'https://pitcherlist.com/category/fantasy/relief-pitchers/reliever-ranks/',
       hitIndex: 'https://pitcherlist.com/category/fantasy/hitters-fantasy/hitter-list/',
     },
+
+    // Starting-pitcher rank SOURCES - the SP rank is user-selectable (popup dropdown; STORAGE.spSource).
+    // Closers + hitters always stay Pitcher List (above); the others publish SP-only weekly lists. Plain
+    // DATA only (HARD RULE: no functions/RegExp in shared CONFIG): `articleRe` is a STRING the service
+    // worker rebuilds with new RegExp(articleRe, articleReFlags); `playerUrl` is a "{slug}" template (or
+    // null when the source's ranking table carries no per-player link). Each weekly ranking is a
+    // server-rendered HTML table the SW regex-parses (verified live 2026); the latest week's article is
+    // resolved via the category RSS feed (newest link first; the category HTML index is the fallback).
+    // `minRows` is the trust floor -> a short/broken parse renders NO SP rank rather than wrong ranks.
+    //   pitcherList - SP "The List" (Top 100): <table class="list">, names linked to /player/{slug}/.
+    //   razzball    - "Top 100 Starting Pitchers": the LARGEST plain <table> (rank|name|team|notes); the
+    //                 author's ~20-row "Pitching WAR" chart is the smaller decoy. Names unlinked -> no URL.
+    //   rotoBaller  - "SP Rankings for Week N": the table with the MOST player links (rank|tier|player|…);
+    //                 a small "prospects to stash" table is the decoy. Players link to /mlb/player/{id}/{name}.
+    spSources: {
+      pitcherList: {
+        id: 'pitcherList', label: 'Pitcher List', abbr: 'PL',
+        spFeed:    'https://pitcherlist.com/category/fantasy/starting-pitchers/the-list/feed/',
+        spIndex:   'https://pitcherlist.com/category/fantasy/starting-pitchers/the-list/',
+        articleRe: 'https://pitcherlist\\.com/top-100-starting-pitchers[a-z0-9-]*/', articleReFlags: 'i',
+        minRows: 50, parser: 'pl', playerUrl: 'https://pitcherlist.com/player/{slug}/',
+      },
+      razzball: {
+        id: 'razzball', label: 'Razzball', abbr: 'RZ',
+        spFeed:    'https://razzball.com/category/top-100-starting-pitchers/feed/',
+        spIndex:   'https://razzball.com/category/top-100-starting-pitchers/',
+        articleRe: 'https://razzball\\.com/top-100-starting-pitchers[a-z0-9-]*/', articleReFlags: 'i',
+        minRows: 50, parser: 'razzball', playerUrl: null,
+      },
+      rotoBaller: {
+        id: 'rotoBaller', label: 'RotoBaller', abbr: 'RB',
+        spFeed:    'https://www.rotoballer.com/category/mlb/fantasy-baseball-advice-analysis/mlb-rankings/feed',
+        spIndex:   'https://www.rotoballer.com/category/mlb/fantasy-baseball-advice-analysis/mlb-rankings/',
+        articleRe: 'https://www\\.rotoballer\\.com/fantasy-baseball-starting-pitcher-rankings-for-week-\\d+-\\d{4}/\\d+', articleReFlags: 'i',
+        minRows: 40, parser: 'roto', playerUrl: 'https://www.rotoballer.com{slug}',
+      },
+    },
+    spSourceDefault: 'pitcherList',
 
     // ESPN's player-table DOM. Class names are obfuscated and shift when ESPN reships their frontend.
     selectors: {
@@ -336,15 +372,26 @@
   // Default Pitcher List display toggles, merged with any saved subset (so new lists default sensibly).
   function defaultPlPrefs() { return { ...CONFIG.plPrefs }; }
   function mergePlPrefs(saved) { return { ...CONFIG.plPrefs, ...(saved && typeof saved === 'object' ? saved : {}) }; }
-  // Resolve which PL rank to display for a record given the toggles + row kind. Returns
-  // { rank, list:'sp'|'rp'|'h' } or null when nothing should show. Master off -> always null.
+  // Resolve which rank to display for a record given the toggles + row kind. Returns
+  // { rank, list:'sp'|'rp'|'h', src, slug, tier } or null when nothing should show. The SP rank carries
+  // its own source (rec.spSrc/spSlug/spTier) so the badge can label + link it correctly; closers and
+  // hitters are always Pitcher List. Master off -> always null.
   function plPick(rec, kind, pl) {
     if (!rec || !pl || pl.on === false) return null;
-    if (kind === 'bat') return (pl.h !== false && rec.h != null) ? { rank: rec.h, list: 'h' } : null;
-    if (pl.sp !== false && rec.sp != null) return { rank: rec.sp, list: 'sp' };
-    if (pl.rp !== false && rec.rp != null) return { rank: rec.rp, list: 'rp' };
+    if (kind === 'bat') return (pl.h !== false && rec.h != null)
+      ? { rank: rec.h, list: 'h', src: 'pitcherList', slug: rec.slug, tier: rec.tier } : null;
+    if (pl.sp !== false && rec.sp != null)
+      return { rank: rec.sp, list: 'sp', src: rec.spSrc || 'pitcherList', slug: rec.spSlug, tier: rec.spTier };
+    if (pl.rp !== false && rec.rp != null)
+      return { rank: rec.rp, list: 'rp', src: 'pitcherList', slug: rec.slug, tier: rec.tier };
     return null;
   }
+
+  // SP rank sources (user-selectable). The registry (CONFIG.spSources) is plain data; these resolve and
+  // validate a chosen id, falling back to the default (Pitcher List) on an unknown/absent id.
+  function spSourceList() { return Object.values(CONFIG.spSources).map(s => ({ id: s.id, label: s.label })); }
+  function validSpSource(id) { return !!(id && CONFIG.spSources[id]); }
+  function spSourceCfg(id) { return CONFIG.spSources[id] || CONFIG.spSources[CONFIG.spSourceDefault]; }
 
   // Count helper for the loaded-rows diagnostic: each index value is an array of records.
   function countIndex(idx) { return Object.values(idx || {}).reduce((a, arr) => a + arr.length, 0); }
@@ -355,15 +402,19 @@
     plPrefs: 'plPrefs',             // chrome.storage.sync (Pitcher List display toggles: {on,sp,rp,h})
     debug: 'debug',                 // chrome.storage.sync
     enabled: 'enabled',             // chrome.storage.sync (master on/off; absent = on)
+    spSource: 'spSource',           // chrome.storage.sync (selected SP rank source id; absent = pitcherList)
+    // v6: the SP entry of the `pl` index is now source-tagged (spSrc/spSlug/spTier) so a non-PL starters
+    //     source can be selected; closers + hitters stay Pitcher List.
     // v5: pitcher matchup now grades park-neutral team wOBA (was OPS); teamOff entries carry
     //     { woba, nwoba, pf, rank, z } and a sibling `teamOffMeta` { mean, sd, total } is added.
     // v4: added team-offense (`teamOff`/`teamAbbr`) + the player's team id on the hand index (matchups).
     // v3: added the Savant percentile index (`pct`) for the player-card sliders.
     // v2: the hand index also carries the player's MLBAM id (used to compute QS).
-    cacheKey: (year) => `barrelVision:index:v5:${year}`,      // chrome.storage.local
+    cacheKey: (year) => `barrelVision:index:v6:${year}`,      // chrome.storage.local
     qsKey: (year) => `barrelVision:qs:v1:${year}`,            // chrome.storage.local (per-pitcher QS cache)
     splitsKey: (year) => `barrelVision:splits:v1:${year}`,    // chrome.storage.local (per-batter platoon splits)
-    plKey: (year) => `barrelVision:pl:v1:${year}`,            // chrome.storage.local (weekly Pitcher List cache)
+    // v2: the weekly cache now carries the SP source id (`src`) so switching source forces a refetch.
+    plKey: (year) => `barrelVision:pl:v2:${year}`,            // chrome.storage.local (weekly SP/PL cache)
     plOverride: (year) => `barrelVision:plOverride:v1:${year}`, // chrome.storage.local (manual-paste fallback)
   };
 
@@ -372,6 +423,7 @@
     num, pct, pctFrac, dec3, dec2, dec1, gap3, gapEra,
     normName, handWord, cellSignal, cellColor, defaultPrefs,
     defaultPlPrefs, mergePlPrefs, plPick, countIndex,
+    spSourceList, validSpSource, spSourceCfg,
     teamWoba, parkWobaMult, parkNeutralizeWoba, PARK_FACTORS,
   };
 })(typeof self !== 'undefined' ? self : this);

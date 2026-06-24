@@ -92,6 +92,11 @@ input[type="checkbox"] { width: 15px; height: 15px; cursor: pointer; accent-colo
 .bv-pl-head { display: flex; align-items: center; gap: 8px; }
 .bv-pl-title { font-weight: 600; font-size: 12px; color: #444; }
 .bv-pl-body.bv-hidden { display: none; }
+/* Starters rank-source dropdown (closers + batters are always Pitcher List). */
+.bv-pl-source { display: flex; align-items: center; gap: 8px; margin: 10px 0 2px;
+  font-size: 12px; font-weight: 600; color: #444; }
+.bv-pl-source select { flex: 1; font-size: 12px; padding: 4px 6px; border: 1px solid #ccc;
+  border-radius: 6px; background: #fff; color: #222; cursor: pointer; }
 /* Per-list toggles (Starting pitchers / Closers / Hitters). */
 .bv-pl-lists { display: flex; flex-wrap: wrap; gap: 8px 16px; margin: 10px 0 4px; }
 .bv-pl-list { display: flex; align-items: center; gap: 6px; font-size: 12px; color: #444; cursor: pointer; }

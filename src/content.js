@@ -220,29 +220,31 @@
     return 'bat';
   }
 
-  // Build the inline "• PL #N" badge from a Pitcher List record { sp?, rp?, h?, tier, slug }. Which rank
-  // shows depends on the row kind: pitchers use SP rank (wins over closer if both, in practice XOR),
-  // hitters use the "Top 150 Hitters" rank. The source list + tier is named in the tooltip, per the
-  // agreed display spec. The leading bullet always stays plain text; only the "PL #N" part becomes a blue
-  // link, and only when asLink is set AND a slug is known (the player-card overlay; lists pass asLink=false).
+  // Build the inline rank badge ("• PL #N" / "• RZ #N" / "• RB #N") from a pick (BV.plPick already
+  // resolved the rank + which SOURCE produced it + slug + tier). Pitchers use the SP rank (from the
+  // user-selected source: Pitcher List, Razzball or RotoBaller); hitters use PL's "Top 150 Hitters" rank;
+  // closers use PL's "Top 50 Closers". The source + tier is named in the tooltip; the leading bullet
+  // stays plain text and only the "{ABBR} #N" part becomes a blue link, and only when asLink is set AND
+  // the source has a per-player URL for this slug (the player-card overlay; lists pass asLink=false).
   function plBadge(r, asLink, kind) {
     const pick = BV.plPick(r, kind, PL_PREFS);   // honours the master + per-list display toggles
     if (!pick) return null;
-    const rank = pick.rank;
-    const tierTip = r.tier ? ` (Tier ${String(r.tier).replace(/^T/, '')})` : '';
-    const title = pick.list === 'h'  ? `Pitcher List — hitter rank${tierTip}`
-                : pick.list === 'sp' ? `Pitcher List — SP rank${tierTip}`
-                : 'Pitcher List — closer rank';
+    const src = BV.spSourceCfg(pick.src);                          // abbr / label / playerUrl for this source
+    const showTier = pick.list !== 'rp' && pick.tier;             // closers carry no tier in the tooltip
+    const tierTip = showTier ? ` (Tier ${String(pick.tier).replace(/^T/, '')})` : '';
+    const listName = pick.list === 'h' ? 'hitter rank' : pick.list === 'sp' ? 'SP rank' : 'closer rank';
     const span = document.createElement('span');
     span.className = 'savant-pl';
-    span.title = title;
+    span.title = `${src.label} — ${listName}${tierTip}`;
     span.append('• ');                                  // bullet is plain text, never underlined
-    const label = `PL #${rank}`;
-    if (asLink && r.slug) {
+    const label = `${src.abbr} #${pick.rank}`;
+    let href = (src.playerUrl && pick.slug) ? src.playerUrl.replace('{slug}', pick.slug) : '';
+    if (!href && pick.list === 'sp' && r.spListUrl) href = r.spListUrl;   // no player page (Razzball) -> this week's list
+    if (asLink && href) {
       const a = document.createElement('a');
       a.className = 'savant-pl-link';
       a.textContent = label;
-      a.href = `https://pitcherlist.com/player/${r.slug}/`;
+      a.href = href;
       a.target = '_blank';
       a.rel = 'noopener';
       span.appendChild(a);
@@ -904,7 +906,8 @@
       savant = `Savant: ${STATS.loaded.bat} hitters · ${STATS.loaded.pit} pitchers · matched ${STATS.matched}/${STATS.found} rows`;
       if (STATS.found === 0) savant += ' · ⚠ no player rows (selector?)';
       api = `MLB API: ${STATS.loaded.hand} handedness found`;
-      pl = `Pitcher List: ${STATS.loaded.plSp || 0} SP · ${STATS.loaded.plRp || 0} closers · ${STATS.loaded.plHit || 0} batters ranked`;
+      const spLabel = BV.spSourceCfg(STATS.loaded.plSpSrc || BV.CONFIG.spSourceDefault).label;
+      pl = `Ranks: ${STATS.loaded.plSp || 0} SP (${spLabel}) · ${STATS.loaded.plRp || 0} closers · ${STATS.loaded.plHit || 0} batters (Pitcher List)`;
       pct = `Savant percentiles: ${STATS.loaded.pctBat || 0} batters · ${STATS.loaded.pctPit || 0} pitchers`;
     }
     hudEl.innerHTML = `<div>${savant}</div>` + (api ? `<div>${api}</div>` : '') + (pl ? `<div>${pl}</div>` : '') + (pct ? `<div>${pct}</div>` : '');
@@ -1040,7 +1043,9 @@
           hand: Object.keys(INDEXES.hand || {}).length,
           plSp: plv.filter(v => v && v.sp != null).length, plRp: plv.filter(v => v && v.rp != null).length,
           plHit: plv.filter(v => v && v.h != null).length,
+          plSpSrc: (plv.find(v => v && v.sp != null && v.spSrc) || {}).spSrc || BV.CONFIG.spSourceDefault,
         };
+        clearHandMarkers();                    // force decorateBlock to rebuild badges (new SP source/abbr)
         scan(INDEXES);
       }
     }
