@@ -60,3 +60,21 @@ input[type="checkbox"] { width: 15px; height: 15px; cursor: pointer; accent-colo
 #bv-refresh:disabled { opacity: .6; cursor: default; }
 
 .bv-status { padding: 0 16px 12px; min-height: 16px; color: #4a7; font-size: 12px; }
+
+/* Pitcher List manual-override fallback (collapsed by default - it's a rarely-needed safety net). */
+.bv-pl { border-top: 1px solid #e6e6e6; padding: 10px 16px 14px; }
+.bv-pl > summary { cursor: pointer; font-weight: 600; font-size: 12px; color: #444; }
+.bv-pl-note { margin: 8px 0; color: #666; font-size: 11px; line-height: 1.4; }
+.bv-pl-note code { background: #f0f0f0; padding: 1px 4px; border-radius: 3px; }
+.bv-pl-lab { display: block; margin: 8px 0 3px; font-size: 11px; font-weight: 600; color: #555; }
+.bv-pl-ta { width: 100%; font: 11px/1.4 ui-monospace, "SF Mono", Menlo, monospace; padding: 6px 8px;
+  border: 1px solid #ccc; border-radius: 6px; resize: vertical; }
+.bv-pl-fetchrow { margin: 4px 0 2px; }
+.bv-pl-btns { display: flex; justify-content: flex-end; gap: 8px; margin-top: 10px; }
+/* All PL buttons use the same neutral style as Reset / Refresh advanced data (no red accent). */
+.bv-pl-fetchrow button, .bv-pl-btns button {
+  padding: 6px 12px; border-radius: 6px; border: 1px solid #ccc; cursor: pointer; font-size: 12px;
+  background: #fff; color: #333;
+}
+.bv-pl-fetchrow button:hover, .bv-pl-btns button:hover { background: #f6f6f6; }
+.bv-pl-fetchrow button:disabled, .bv-pl-btns button:disabled { opacity: .6; cursor: default; }

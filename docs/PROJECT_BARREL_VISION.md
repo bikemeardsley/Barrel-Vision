@@ -1,14 +1,17 @@
 # Barrel Vision — ESPN Fantasy Baseball Savant Overlay
 
-**Status:** MV3 extension **v0.9.0** — a faithful, buildless port of the v0.8.8 Tampermonkey userscript.
-Vanilla Manifest V3 (no framework, no bundler), fully auditable. The service worker fetches + parses
-the Baseball Savant CSV leaderboards and the MLB StatsAPI roster, caches the merged index in
-`chrome.storage.local`; the content script injects contact-quality columns into ESPN's scrolling stats
-panel + the player-card modal, with per-column threshold shading; the toolbar popup edits thresholds
-(persisted to `chrome.storage.sync`) and re-shades live via `storage.onChanged` (no reload). All five
-Savant feeds + StatsAPI re-verified live against 2026 in-season data during the port, including the two
-sign quirks. **In-browser visuals (modal layout, shading, handedness placement, ESPN-blended styling)
-still need an eyeball on first load against the live ESPN DOM.**
+**Status:** MV3 extension **v0.10.0** — a faithful, buildless port of the v0.8.8 Tampermonkey userscript,
+now with Pitcher List weekly ranks. Vanilla Manifest V3 (no framework, no bundler), fully auditable. The
+service worker fetches + parses the Baseball Savant CSV leaderboards, the MLB StatsAPI roster, **and the
+Pitcher List weekly SP + closer rankings**, caches the merged index in `chrome.storage.local`; the
+content script injects contact-quality columns into ESPN's scrolling stats panel + the player-card modal,
+with per-column threshold shading, **and a "• PL #N" rank inline after a pitcher's handedness**; the
+toolbar popup edits thresholds (persisted to `chrome.storage.sync`) and re-shades live via
+`storage.onChanged` (no reload), **and holds a manual-paste fallback for the Pitcher List ranks**. All
+five Savant feeds + StatsAPI re-verified live against 2026 in-season data during the port (incl. the two
+sign quirks); the Pitcher List parser was validated against the live 2026 articles. **In-browser visuals
+(modal layout, shading, handedness + PL# placement, ESPN-blended styling) still need an eyeball on first
+load against the live ESPN DOM.**
 **Owner:** Mike Beardsley
 **League/Team context:** Pitch Clock Strikeouts / Pocket Pancakes (10-team auction, H2H categories)
 **Repo:** github.com/bikemeardsley/barrel-vision
@@ -72,6 +75,25 @@ Those need stored, joined, multi-season data and belong in a heavier build if ev
 - **Pitchers via `type=pitcher`; handedness via MLB StatsAPI.** The pitcher feeds carry **no
   handedness** (same as batter feeds) but add `era/xera/era_minus_xera_diff`. Throwing/batting hand
   comes from one public no-key StatsAPI call (`sports/1/players`), keyed by normalized name.
+- **Pitcher List ranks: automated parse, with a manual-paste fallback (v0.10.0).** PL publishes its
+  weekly SP "The List" (Top 100) and reliever "Top 50 Closers" as *articles*, not an API — so this was a
+  verify-first call. **Verified against the live 2026 articles:** both rankings are a clean,
+  server-rendered `<table class="list">` (`td.rank` / `td.name>a` / `td.team` / `span.tier`), present in
+  the **raw HTML with no JS** (so the SW `fetch` reaches them; no headless browser). So Path A
+  (automated) over Path B (manual): resolve the latest week's URL via the category **RSS feed** (newest
+  `<link>` first; the category HTML index is the fallback), then **regex-parse** the first list table —
+  a classic service worker has **no `DOMParser`**. Join by the existing `normName` (PL's name + slug both
+  normalize to the same key; accents/apostrophes strip cleanly). **Gotcha worth recording:** an early
+  readability-style fetch *reformatted the prose into tidy markdown tables and invented columns/lists* —
+  only the raw HTML showed the true structure, so verify against `curl`, not a summarizer. Two
+  brittleness guards: a **graceful skip** (a short parse → render nothing, never wrong ranks) and a
+  **manual-paste override** in the popup (Path B) for any week the markup changes.
+- **PL data is a flat `pl` index, not a `pit` column.** Like `hand`, the PL ranks are a flat
+  `normName → { sp?, rp?, slug, tier, team }` map read directly by the content script and rendered
+  *inline after handedness* — not a shaded table column. This also keeps it off the CSV `mergeFeeds`
+  path, whose `/^\s*</` guard would (correctly) reject HTML. Weekly (7-day) cache, mirroring the
+  per-pitcher QS cache. **Only factual rank+name+team+tier are taken — never the prose write-ups**
+  (those stay on PL's site; the modal links back to `…/player/{slug}/` for attribution + traffic).
 - **Prebuilt extensions evaluated and rejected.** The Chrome Web Store "ESPN Fantasy Baseball Advanced
   Statistics" lacks barrel rate; "FantasyLink" injects *links*, not metric columns. Net: DIY.
 
@@ -93,9 +115,9 @@ Those need stored, joined, multi-season data and belong in a heavier build if ev
 │         parseCsv → mergeFeeds (per-feed id map) → Gap derived est_woba−woba  │
 │         re-key by normalized name → write {ts, indexes} to storage.local     │
 └───────────────┬──────────────────────────────────────────────────────────────┘
-                │ {ok, indexes:{bat,pit,hand}, counts}
+                │ {ok, indexes:{bat,pit,hand,pl}, counts}   (pl = Pitcher List ranks, weekly)
                 ▼
-        content.js renders + shades; HUD shows match counts
+        content.js renders + shades; "• PL #N" after handedness; HUD shows match counts
 
 ┌─ popup.html/js (toolbar action) ────────────────────────────────────────────┐
 │  edit per-column thresholds → chrome.storage.sync  → content re-shades live   │
@@ -171,9 +193,18 @@ text). Headers below are the *actual* headers (re-verified live 2026, `min=10`).
 | Exit Velocity (pitcher) | `…/leaderboard/statcast?type=pitcher&…&min={MIN}&csv=true` | same as batter EV, now contact **allowed** |
 | Expected Statistics (pitcher) | `…/leaderboard/expected_statistics?type=pitcher&…&min={MIN}&csv=true` | batter columns **plus** `era`, `xera`, `era_minus_xera_diff` |
 | Handedness | `statsapi.mlb.com/api/v1/sports/1/players?season={Y}` (JSON) | `fullName`, `batSide.code`, `pitchHand.code` (L/R/S), `primaryPosition`, `nameSlug` |
+| Pitcher List ranks | weekly **article** on `pitcherlist.com`, latest URL via category **RSS** (`…/the-list/feed/`, `…/reliever-ranks/feed/`) | first `<table class="list">`: `td.rank`, `td.name>a` (name + `/player/{slug}/`), `td.team`, `span.tier` |
 
 The pitcher feeds key on `player_id` and carry **no handedness column** — throwing hand needs StatsAPI.
 There is no pitcher equivalent of the bat-tracking feed, so pitchers get no BatSpd/SqUp%.
+
+**Pitcher List (HTML, not CSV/JSON).** Unlike the structured Savant/StatsAPI endpoints, PL is a weekly
+article. The ranking itself is a clean server-rendered table (verified live 2026: SP "The List" = 100
+rows; reliever "Top 50 Closers" = the *first* `<table class="list">`, before the Holds/SV+HLD tables).
+The SW resolves the newest article via the RSS feed, then **regex-parses** the first list table (no
+`DOMParser` in a classic worker), carrying the tier forward (PL labels only each tier's leading row).
+Joined by `normName`. Best-effort with a graceful skip + a popup manual-paste fallback; weekly (7-day)
+cache. **Extraction is minimal by design — ranks/names/teams/tiers only, never the prose write-ups.**
 
 ### Verified data quirks — DO NOT "fix" these
 
@@ -210,8 +241,9 @@ worse, gradient by distance (`scale`), capped. `dir` per column (`high`/`low`). 
 `CONFIG.preferences`; user overrides persist to `chrome.storage.sync` and are merged onto defaults at
 load (so new columns appear for existing users). xERA / ERA / WHIP default **OFF** with thresholds
 pre-filled. Edited in the **toolbar popup** (Hitters / Pitchers sections, enable + threshold per
-column, Reset to defaults, Refresh Savant data, debug toggle). Changes apply live — no Save button, no
-reload.
+column, Reset to defaults, **Refresh advanced data** [Savant + StatsAPI], debug toggle, and a
+collapsible **Pitcher List ranks** section with *Fetch latest ranks* + a manual override). Changes apply
+live — no Save button, no reload.
 
 ---
 
@@ -333,7 +365,8 @@ insufficient.
 | xwOBA allowed | `est_woba` | ✅ oxwOBA | contact suppression |
 | Barrel% allowed | `brl_percent` | ✅ oBrl% | contact suppression |
 | Hard-Hit% allowed | `ev95percent` | ✅ oHH% | contact suppression |
-| Stuff+ / PLV / xFIP / K-BB% | — | ✖ Pitcher List / FanGraphs | #1/#2 SP priorities |
+| Stuff+ / PLV / xFIP / K-BB% | — | ✖ the underlying metrics aren't free; but PL's *composite rank* (below) is | #1/#2 SP priorities |
+| Pitcher List rank (SP + closer) | PL weekly article `td.rank` | ✅ inline "• PL #N" after handedness (SP "The List" / "Top 50 Closers") | analyst composite |
 | Throwing hand | StatsAPI `pitchHand.code` | ✅ (StatsAPI, not Savant) | matchup context |
 
 ---
@@ -349,6 +382,33 @@ insufficient.
 
 ## 15. Changelog
 
+- **v0.10.0 (Pitcher List ranks)** —
+  - **New source: Pitcher List weekly SP + closer rankings, surfaced inline as "• PL #N" after a
+    pitcher's handedness** (pitchers only; list view + player-card modal). SP rank from "The List"
+    (Top 100), closer rank from the reliever "Top 50 Closers." Both show `PL #N` with a tooltip naming
+    the source list + tier (SP) / "closer rank" (RP).
+  - **Path A (automated) chosen after verifying the live articles.** Both rankings are a clean,
+    server-rendered `<table class="list">` present in the raw HTML — so the SW `fetch` reaches them with
+    no headless browser. The SW resolves the newest weekly article via the category **RSS feed** (HTML
+    index as fallback) and **regex-parses** the first list table (no `DOMParser` in a classic worker),
+    carrying tiers forward. Joined by the existing `normName`.
+  - **New flat `pl` index** (`normName → { sp?, rp?, slug, tier, team }`), like `hand` — read directly
+    by the content script, *not* a shaded `pit` column, and off the CSV `mergeFeeds` path. **Weekly
+    (7-day) cache** (`getPL`, mirroring the per-pitcher QS cache); the popup's **Refresh** force-refetches.
+  - **Popup controls (decoupled from the Savant refresh):** the existing button is renamed **"Refresh
+    advanced data"** (Savant + StatsAPI; leaves PL on its weekly cache). A new **"Refresh Pitcher List"**
+    path (`REFRESH_PL` message → `refreshPL`) re-fetches *only* the PL ranks live and merges them into the
+    cached index (Savant untouched, index `ts` preserved so the 12h Savant timer isn't reset). All popup
+    buttons are neutral grey (no red accent).
+  - **Manual override is per-week, not permanent.** Paste the article list or simple "1 Name" lines and
+    **Save** — honored for `plCacheTtlDays` (7 days) from when it was saved, after which **auto-fetch
+    resumes on its own** (no Clear needed); *Fetch latest ranks* / *Clear* pull live immediately
+    (force bypasses the override). Plus a **graceful skip** (a short parse renders no PL# rather than
+    wrong ranks).
+  - **Etiquette:** only factual ranks/names/teams/tiers are extracted — never the prose write-ups; the
+    modal links back to `pitcherlist.com/player/{slug}/` for attribution. One new host permission
+    (`pitcherlist.com`); no Google/Sheets, no `<all_urls>`.
+  - Debug HUD gains a `Pitcher List: N SP · M closers ranked` line.
 - **v0.9.1** —
   - **QS is now computed from StatsAPI, not scraped from ESPN's list.** The roster-list scrape read the
     list's current stat-filter window, so a Last-7/15/30/Projected view could surface a non-season QS on

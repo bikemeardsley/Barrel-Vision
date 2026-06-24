@@ -89,7 +89,7 @@ async function mergeFeeds(feeds) {
 // ---------------------------------------------------------------------------
 // Index build
 // ---------------------------------------------------------------------------
-async function buildFresh() {
+async function buildFresh(forcePl) {
   const Y = BV.CONFIG.year, M = BV.CONFIG.minBattedBalls, S = BV.CONFIG.savant;
 
   // Batter index: two required batted-ball feeds + the optional bat-tracking validation layer
@@ -123,14 +123,27 @@ async function buildFresh() {
     }
   } catch (e) { console.warn(`[Barrel Vision] StatsAPI handedness skipped: ${e.message}`); }
 
-  return { bat, pit, hand };
+  // Pitcher List weekly ranks, keyed by normalized name -> { sp?, rp?, slug, tier, team } (a flat
+  // name->object map like `hand`, NOT arrays - the content script reads it directly and renders it
+  // inline after handedness). Best-effort: any failure leaves `pl` partial/empty; nothing else breaks.
+  // PL has its own weekly cache/override, so a normal/advanced rebuild does NOT force it (forcePl is
+  // only true via the dedicated "Refresh Pitcher List" path); it still auto-fetches when its cache expires.
+  let pl = {};
+  try { pl = await getPL(forcePl); }
+  catch (e) { console.warn(`[Barrel Vision] Pitcher List skipped: ${e.message}`); }
+
+  return { bat, pit, hand, pl };
 }
 
 function countsOf(indexes) {
+  const pl = indexes.pl || {};
+  const plVals = Object.values(pl);
   return {
     bat: BV.countIndex(indexes.bat),
     pit: BV.countIndex(indexes.pit),
     hand: Object.keys(indexes.hand || {}).length,
+    plSp: plVals.filter(v => v && v.sp != null).length,
+    plRp: plVals.filter(v => v && v.rp != null).length,
   };
 }
 
@@ -159,7 +172,7 @@ async function ensureIndex(force) {
     const cached = await loadFromCache(key);
     if (cached) return { indexes: cached, counts: countsOf(cached) };
   }
-  const indexes = await buildFresh();
+  const indexes = await buildFresh();   // refreshes Savant + StatsAPI; PL stays on its own weekly cache
   await writeCache(key, indexes);
   return { indexes, counts: countsOf(indexes) };
 }
@@ -192,6 +205,174 @@ async function getQS(id) {
 }
 
 // ---------------------------------------------------------------------------
+// Pitcher List weekly rankings (SP "The List" + reliever "Top 50 Closers").
+// Published as weekly ARTICLES, but the ranking is a clean server-rendered
+// <table class="list"> (verified live). A classic service worker has NO
+// DOMParser, so we regex-parse the HTML string. We take ONLY rank+name+slug+
+// team+tier - never the prose write-ups. Weekly (7-day) cache, mirroring getQS;
+// a manual paste (popup) overrides the auto-fetch. See PROJECT doc §5/§2.
+// ---------------------------------------------------------------------------
+function decodeEntities(s) {
+  return (s || '')
+    .replace(/&amp;/g, '&')
+    .replace(/&#0?39;|&#x27;|&rsquo;|&#8217;/g, "'")
+    .replace(/&quot;/g, '"')
+    .replace(/&#8211;|&ndash;/g, '-')
+    .replace(/&nbsp;/g, ' ')
+    .replace(/&#(\d+);/g, (_, d) => String.fromCodePoint(+d))
+    .trim();
+}
+
+// Parse the FIRST <table class="list"> into [{rank, name, slug, team, tier}]. In BOTH articles the
+// first such table is the ranking we want (SP: The List; RP: Top 50 Closers, BEFORE the Holds/SV+HLD
+// tables). Auxiliary DataTables on the page carry different classes, so they're skipped.
+function parsePlList(html) {
+  const tbl = (html || '').match(/<table class="list">([\s\S]*?)<\/table>/);
+  if (!tbl) return [];
+  const out = [];
+  let lastTier = '';   // PL labels only each tier's LEADING row (span.tier); tiers are monotonic, so
+  for (const seg of tbl[1].split('<tr')) {   // carry the last-seen tier forward to every player in it.
+    const rank = seg.match(/class="rank">\s*(\d+)\s*</);
+    if (!rank) continue;
+    const nm = seg.match(/class="name">\s*<a[^>]*href="[^"]*\/player\/([^/"]+)\/"[^>]*>([^<]+)<\/a>/);
+    if (!nm) continue;
+    const team = seg.match(/class="team">\s*([^<]*?)\s*</);
+    const tier = seg.match(/class="tier">\s*(T\d+)\s*</);
+    if (tier) lastTier = tier[1];
+    out.push({
+      rank: +rank[1],
+      slug: nm[1],
+      name: decodeEntities(nm[2]),
+      team: team ? decodeEntities(team[1]).toUpperCase() : '',
+      tier: tier ? tier[1] : lastTier,
+    });
+  }
+  return out;
+}
+
+// Parse a manually-pasted list (popup fallback): either pasted article HTML, or simple lines like
+// "1 Mason Miller", "1. Mason Miller (SD)", "12) Tarik Skubal (DET) - analysis...". No slug from text.
+function parsePlText(text) {
+  if (/<td class="rank"|<table class="list"/.test(text || '')) return parsePlList(text);
+  const out = [];
+  for (const raw of String(text || '').split(/\r?\n/)) {
+    const line = raw.trim();
+    const m = line.match(/^#?(\d+)[.):]?\s+(.+)$/);
+    if (!m) continue;
+    let rest = m[2];
+    const teamM = rest.match(/\(([A-Za-z]{2,3})\)/);
+    const team = teamM ? teamM[1].toUpperCase() : '';
+    rest = rest.replace(/\s+[-–—]\s+.*$/, '').replace(/\s*\([^)]*\)\s*$/, '').trim(); // drop trailing analysis + (TEAM)
+    if (!rest) continue;
+    out.push({ rank: +m[1], name: decodeEntities(rest), slug: '', team, tier: '' });
+  }
+  return out;
+}
+
+// Resolve the latest weekly article URL. RSS first (reverse-chronological: the first article-shaped
+// <link> is the newest week); the category HTML index is the fallback if the feed shape changes.
+async function latestArticleUrl(feedUrl, indexUrl, articleRe) {
+  try {
+    const xml = await fetchText(feedUrl);
+    const m = xml.match(articleRe);
+    if (m) return m[0];
+  } catch (_) { /* fall through to the HTML index */ }
+  const html = await fetchText(indexUrl);
+  const m = html.match(articleRe);
+  if (!m) throw new Error('no article link found in feed or index');
+  return m[0];
+}
+
+// Fetch + parse one weekly list. Graceful skip: a short parse (markup changed) returns [] so we
+// render NO rank rather than wrong/partial ranks.
+async function fetchPlList(feedUrl, indexUrl, articleRe, minRows, label) {
+  let url;
+  try { url = await latestArticleUrl(feedUrl, indexUrl, articleRe); }
+  catch (e) { console.warn(`[Barrel Vision] PL ${label} URL resolve failed: ${e.message}`); return []; }
+  let html;
+  try { html = await fetchText(url); }
+  catch (e) { console.warn(`[Barrel Vision] PL ${label} article fetch failed: ${e.message}`); return []; }
+  const rows = parsePlList(html);
+  if (rows.length < minRows) {
+    console.warn(`[Barrel Vision] PL ${label} parse yielded ${rows.length} rows (< ${minRows}) - skipping`);
+    return [];
+  }
+  return rows;
+}
+
+// Merge SP + closer rows into a flat normName -> { sp?, rp?, slug, tier, team } map.
+function buildPlMap(spRows, rpRows) {
+  const pl = {};
+  const add = (rows, key) => {
+    for (const r of rows) {
+      const k = BV.normName(r.name);
+      if (!k || r.rank == null) continue;
+      const cur = pl[k] || {};
+      pl[k] = { ...cur, [key]: r.rank, slug: cur.slug || r.slug || '', tier: cur.tier || r.tier || '', team: cur.team || r.team || '' };
+    }
+  };
+  add(spRows, 'sp');
+  add(rpRows, 'rp');
+  return pl;
+}
+
+async function getPL(force) {
+  const Y = BV.CONFIG.year;
+  const overKey = BV.STORAGE.plOverride(Y);
+  const cacheK = BV.STORAGE.plKey(Y);
+  const ttl = BV.CONFIG.plCacheTtlDays * 86400e3;
+
+  // `force` (the manual "Refresh Pitcher List" button / Clear) pulls live data, bypassing BOTH the
+  // override and the weekly cache. A normal/advanced rebuild (force=false) prefers a fresh override,
+  // then a fresh weekly cache, then a live fetch.
+  if (!force) {
+    // 1) Manual override (Path B) - honored for ONE WEEK from when it was saved, then auto-fetch
+    //    resumes on its own (no Clear needed): the paste is treated as "this week only".
+    try {
+      const o = (await chrome.storage.local.get(overKey))[overKey];
+      if (o && (o.sp || o.rp) && (Date.now() - (o.ts || 0)) < ttl) {
+        const sp = o.sp ? parsePlText(o.sp) : [];
+        const rp = o.rp ? parsePlText(o.rp) : [];
+        if (sp.length || rp.length) return buildPlMap(sp, rp);
+      }
+    } catch (_) {}
+
+    // 2) Weekly cache (7-day TTL).
+    try {
+      const c = (await chrome.storage.local.get(cacheK))[cacheK];
+      if (c && (Date.now() - c.ts) < ttl) return c.pl || {};
+    } catch (_) {}
+  }
+
+  // 3) Fetch + parse this week's articles.
+  const P = BV.CONFIG.pitcherList;
+  const spRows = await fetchPlList(P.spFeed, P.spIndex, /https:\/\/pitcherlist\.com\/top-100-starting-pitchers[a-z0-9-]*\//i, 50, 'SP');
+  const rpRows = await fetchPlList(P.rpFeed, P.rpIndex, /https:\/\/pitcherlist\.com\/fantasy-reliever-rankings[a-z0-9-]*\//i, 20, 'closers');
+  const pl = buildPlMap(spRows, rpRows);
+  try { await chrome.storage.local.set({ [cacheK]: { ts: Date.now(), pl } }); } catch (_) {}
+  return pl;
+}
+
+// Refresh ONLY the Pitcher List ranks and merge them into the current index, leaving the Savant /
+// StatsAPI data untouched (so the manual "Refresh Pitcher List" button doesn't refetch everything).
+// Reuses the cached bat/pit/hand and preserves the index ts so the 12h Savant timer isn't reset.
+async function refreshPL(force) {
+  const key = BV.STORAGE.cacheKey(BV.CONFIG.year);
+  let cached = null;
+  try { cached = (await chrome.storage.local.get(key))[key]; } catch (_) {}
+  let indexes, ts;
+  if (cached && cached.indexes) {
+    indexes = { ...cached.indexes, pl: await getPL(force) };
+    ts = cached.ts;                       // keep Savant's 12h freshness window intact; only PL changed
+  } else {
+    indexes = await buildFresh(force);    // nothing cached yet -> full build (forces PL when asked)
+    ts = Date.now();
+  }
+  try { await chrome.storage.local.set({ [key]: { ts, indexes } }); } catch (_) {}
+  return { counts: countsOf(indexes) };
+}
+
+// ---------------------------------------------------------------------------
 // Messaging - listener registered SYNCHRONOUSLY at top level so a wake-up
 // message is never missed. Non-async listener that returns `true` to hold the
 // channel open for the async sendResponse (the universally-compatible pattern;
@@ -211,6 +392,14 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
       .catch(err => sendResponse({ ok: false, error: err.message }));
     return true;
   }
+  // PL-only refresh. force:true (manual "Refresh Pitcher List" / Clear) pulls live, bypassing the
+  // override; force:false (Save) honors the just-saved override. Either way, Savant data is untouched.
+  if (msg.type === 'REFRESH_PL') {
+    refreshPL(msg.force !== false)
+      .then(({ counts }) => sendResponse({ ok: true, counts }))
+      .catch(err => sendResponse({ ok: false, error: err.message }));
+    return true;
+  }
   if (msg.type === 'GET_QS') {
     getQS(msg.id)
       .then(qs => sendResponse({ ok: true, qs }))
@@ -218,3 +407,45 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
     return true;
   }
 });
+
+// ---------------------------------------------------------------------------
+// Toolbar icon: greyed everywhere, "lit" only on the sites the overlay runs on.
+// Uses declarativeContent so CHROME evaluates the URL rule internally - the
+// extension never receives tab URLs/history (no "tabs" permission; more private
+// than reading tab.url ourselves).
+//
+// SINGLE SOURCE OF TRUTH for "which sites": the manifest's content_scripts.matches.
+// To support more sites later, add the pattern there (where you'd add it to inject
+// anyway) - this rule is derived from it, so nothing else needs editing here.
+// ---------------------------------------------------------------------------
+function matchPatternToRegex(p) {
+  if (p === '<all_urls>') return '^https?://.*$';
+  const m = p.match(/^(\*|https?|file|ftp):\/\/([^/]*)(\/.*)$/);
+  if (!m) return '^$';                                       // unrecognized -> matches nothing
+  const esc = s => s.replace(/[.+?^${}()|[\]\\]/g, '\\$&');  // escape regex specials (NOT '*')
+  const scheme = m[1] === '*' ? 'https?' : m[1];
+  const host = m[2];
+  const h = host === '*' ? '[^/]+'
+          : host.startsWith('*.') ? '([^/]+\\.)?' + esc(host.slice(2))
+          : esc(host);
+  const path = esc(m[3]).replace(/\*/g, '.*');               // '*' glob -> '.*'
+  return '^' + scheme + '://' + h + path + '$';
+}
+
+function applyActionRules() {
+  // Without the permission, leave the icon usable everywhere (so settings stay reachable).
+  if (!chrome.declarativeContent) { chrome.action.enable(); return; }
+  chrome.action.disable();                                   // greyed by default; rule re-enables on match
+  const matches = (chrome.runtime.getManifest().content_scripts || []).flatMap(cs => cs.matches || []);
+  const conditions = matches.map(p =>
+    new chrome.declarativeContent.PageStateMatcher({ pageUrl: { urlMatches: matchPatternToRegex(p) } })
+  );
+  chrome.declarativeContent.onPageChanged.removeRules(undefined, () => {
+    chrome.declarativeContent.onPageChanged.addRules([
+      { conditions, actions: [new chrome.declarativeContent.ShowAction()] },
+    ]);
+  });
+}
+
+chrome.runtime.onInstalled.addListener(applyActionRules);
+chrome.runtime.onStartup.addListener(applyActionRules);

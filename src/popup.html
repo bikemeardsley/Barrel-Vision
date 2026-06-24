@@ -33,11 +33,33 @@
     <label class="bv-debug-toggle"><input type="checkbox" id="bv-debug"> Show debug readout</label>
     <div class="bv-foot-btns">
       <button type="button" id="bv-reset">Reset to defaults</button>
-      <button type="button" id="bv-refresh">Refresh data</button>
+      <button type="button" id="bv-refresh">Refresh advanced data</button>
     </div>
   </div>
 
   <div class="bv-status" id="bv-status" role="status" aria-live="polite"></div>
+
+  <details class="bv-pl">
+    <summary>Pitcher List ranks</summary>
+    <p class="bv-pl-note">
+      Ranks are fetched automatically each week. <b>Fetch latest ranks</b> pulls them now (e.g. right
+      after a new list drops). If a week fails to parse (e.g. they change their page), paste the rankings
+      below as a fallback — the article's list or simple lines like <code>1 Player Name</code> — and
+      <b>Save</b>. A pasted override applies for that week only; auto-fetch then resumes. <b>Clear</b>
+      drops it and re-fetches now.
+    </p>
+    <div class="bv-pl-fetchrow">
+      <button type="button" id="bv-pl-fetch">Fetch latest ranks</button>
+    </div>
+    <label class="bv-pl-lab" for="bv-pl-sp">Override — starting pitchers ("The List")</label>
+    <textarea id="bv-pl-sp" class="bv-pl-ta" rows="4" placeholder="1 Jacob Misiorowski&#10;2 Paul Skenes&#10;3 Cristopher Sánchez&#10;…"></textarea>
+    <label class="bv-pl-lab" for="bv-pl-rp">Override — closers (saves)</label>
+    <textarea id="bv-pl-rp" class="bv-pl-ta" rows="4" placeholder="1 Mason Miller&#10;2 Jhoan Duran&#10;3 Josh Hader&#10;…"></textarea>
+    <div class="bv-pl-btns">
+      <button type="button" id="bv-pl-clear">Clear override</button>
+      <button type="button" id="bv-pl-save">Save override</button>
+    </div>
+  </details>
 
   <!-- No inline scripts/handlers (extension-page CSP forbids them). core.js first, then popup.js. -->
   <script src="shared/core.js"></script>

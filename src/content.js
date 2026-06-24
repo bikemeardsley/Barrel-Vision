@@ -108,6 +108,23 @@
     return 'bat';
   }
 
+  // Build the inline "• PL #N" badge from a Pitcher List record { sp?, rp?, tier } (pitchers only).
+  // SP rank wins if a player is on both lists (in practice a pitcher is on The List XOR the closer
+  // list). The source list (SP vs closer) + tier is named in the tooltip, per the agreed display spec.
+  function plBadge(r) {
+    if (!r) return null;
+    const isSp = r.sp != null;
+    const rank = isSp ? r.sp : (r.rp != null ? r.rp : null);
+    if (rank == null) return null;
+    const span = document.createElement('span');
+    span.className = 'savant-pl';
+    span.textContent = `• PL #${rank}`;
+    span.title = isSp
+      ? `Pitcher List — SP rank${r.tier ? ` (Tier ${String(r.tier).replace(/^T/, '')})` : ''}`
+      : 'Pitcher List — closer rank';
+    return span;
+  }
+
   // Hide ESPN's low-value Research columns (PR15 / %ROST / +/-) to make room for ours.
   function hideResearch(scroller) {
     if (!BV.CONFIG.hideResearchColumns) return;
@@ -129,6 +146,7 @@
     const cols = BV.CONFIG.columns[kind];
     const index = indexes[kind];
     const hand = indexes.hand || {};
+    const pl = indexes.pl || {};
 
     // data-idx -> player, from the left (name) table. Also append handedness to the position cell
     // ("MIL C, DH • Righty") - batSide for hitters, pitchHand for pitchers.
@@ -146,6 +164,7 @@
         const want = BV.normName(p.name);
         if (posCell.dataset.savantHandFor !== want) {
           posCell.querySelector('.savant-hand')?.remove();
+          posCell.querySelector('.savant-pl')?.remove();
           const h = hand[BV.normName(p.name)];
           const word = h && BV.handWord(kind === 'pit' ? h.throws : h.bats);
           if (word) {
@@ -153,6 +172,12 @@
             span.className = 'savant-hand';
             span.textContent = `• ${word}`;
             posCell.appendChild(span);
+          }
+          // Pitcher List rank, inline right after handedness (pitchers only). Rebuilt in this same
+          // row-reuse guard, so it can't go stale when ESPN recycles the <tr> on sort/filter/paginate.
+          if (kind === 'pit') {
+            const plSpan = plBadge(pl[want]);
+            if (plSpan) posCell.appendChild(plSpan);
           }
           posCell.dataset.savantHandFor = want;
         }
@@ -268,6 +293,7 @@
 
     // Handedness inline next to the team name, like the list: "Milwaukee Brewers • Righty".
     const hand = (indexes.hand || {})[BV.normName(name)];
+    const plRec = (indexes.pl || {})[BV.normName(name)];
     const teamEl = modal.querySelector('.player-teamname');
     if (teamEl && hand && !teamEl.parentNode.querySelector('.savant-hand')) {
       const word = BV.handWord(isPit ? hand.throws : hand.bats);
@@ -277,6 +303,12 @@
         span.textContent = `• ${word}`;
         teamEl.insertAdjacentElement('afterend', span);
       }
+    }
+
+    // Pitcher List rank, inline right after handedness (pitchers only) - same badge as the list view.
+    if (isPit && teamEl && !teamEl.parentNode.querySelector('.savant-pl')) {
+      const plSpan = plBadge(plRec);
+      if (plSpan) (teamEl.parentNode.querySelector('.savant-hand') || teamEl).insertAdjacentElement('afterend', plSpan);
     }
 
     // Condense ESPN's own columns in place: OBP+SLG -> a single OPS (hitters); W+L -> QS (pitchers).
@@ -331,14 +363,14 @@
       }
     }
 
-    buildAdvancedTable(modal, kind, lookup(indexes[kind], name), hand && hand.slug);
+    buildAdvancedTable(modal, kind, lookup(indexes[kind], name), hand && hand.slug, isPit ? (plRec && plRec.slug) : '');
 
     modal.setAttribute(FLAG, '1');
   }
 
   // Build the standalone "Advanced Stats" table beneath ESPN's Stats table, styled with ESPN's own
   // Table classes so it reads as native. One Season row; cells shaded by the same preference logic.
-  function buildAdvancedTable(modal, kind, row, slug) {
+  function buildAdvancedTable(modal, kind, row, slug, plSlug) {
     const host = modal.querySelector('.player-stats-table');
     if (!host || host.parentNode.querySelector('.savant-adv')) return;
     const cols = BV.CONFIG.columns[kind];
@@ -357,10 +389,15 @@
     const link = slug
       ? `<a class="AnchorLink header_link" tabindex="0" rel="noopener" target="_blank" href="https://baseballsavant.mlb.com/savant-player/${slug}">Savant Page</a>`
       : '';
+    // Attribution link back to Pitcher List (pitchers ranked this week) - sends the user to the full
+    // tiers/write-ups on PL's site rather than reproducing them here.
+    const plLink = plSlug
+      ? `<a class="AnchorLink header_link savant-pl-link" tabindex="0" rel="noopener" target="_blank" href="https://pitcherlist.com/player/${plSlug}/">Pitcher List</a>`
+      : '';
     const wrap = document.createElement('div');
     wrap.className = 'savant-adv';
     wrap.innerHTML =
-      `<div class="Card__Header__Title__Wrapper savant-adv-title"><h3 class="Card__Header__Title Card__Header__Title--no-theme"><div class="flex justify-between items-center">Advanced Stats${link}</div></h3></div>` +
+      `<div class="Card__Header__Title__Wrapper savant-adv-title"><h3 class="Card__Header__Title Card__Header__Title--no-theme"><div class="flex justify-between items-center">Advanced Stats${link}${plLink}</div></h3></div>` +
       `<div class="ResponsiveTable"><div class="Table__ScrollerWrapper"><div>` +
       `<table class="Table"><thead class="Table__THEAD"><tr class="Table__TR Table__even">${head}</tr></thead>` +
       `<tbody class="Table__TBODY"><tr class="Table__TR Table__TR--sm Table__odd">${body}</tr></tbody></table>` +
@@ -400,7 +437,7 @@
       document.body.appendChild(hudEl);
     }
     hudEl.style.display = '';
-    let savant, api = '';
+    let savant, api = '', pl = '';
     if (STATS.error) {
       savant = `⚠ Savant: ${STATS.error}`;
     } else if (STATS.loaded == null) {
@@ -409,8 +446,9 @@
       savant = `Savant: ${STATS.loaded.bat} hitters · ${STATS.loaded.pit} pitchers · matched ${STATS.matched}/${STATS.found} rows`;
       if (STATS.found === 0) savant += ' · ⚠ no player rows (selector?)';
       api = `MLB API: ${STATS.loaded.hand} handedness found`;
+      pl = `Pitcher List: ${STATS.loaded.plSp || 0} SP · ${STATS.loaded.plRp || 0} closers ranked`;
     }
-    hudEl.innerHTML = `<div>${savant}</div>` + (api ? `<div>${api}</div>` : '');
+    hudEl.innerHTML = `<div>${savant}</div>` + (api ? `<div>${api}</div>` : '') + (pl ? `<div>${pl}</div>` : '');
     hudEl.dataset.state = STATS.error ? 'err' : (STATS.found === 0 && STATS.loaded != null ? 'warn' : 'ok');
   }
 
@@ -464,7 +502,12 @@
       const ch = changes[BV.STORAGE.cacheKey(BV.CONFIG.year)];
       if (ch && ch.newValue && ch.newValue.indexes && INDEXES) {  // guard: only react after initial load
         INDEXES = ch.newValue.indexes;
-        STATS.loaded = { bat: BV.countIndex(INDEXES.bat), pit: BV.countIndex(INDEXES.pit), hand: Object.keys(INDEXES.hand || {}).length };
+        const plv = Object.values(INDEXES.pl || {});
+        STATS.loaded = {
+          bat: BV.countIndex(INDEXES.bat), pit: BV.countIndex(INDEXES.pit),
+          hand: Object.keys(INDEXES.hand || {}).length,
+          plSp: plv.filter(v => v && v.sp != null).length, plRp: plv.filter(v => v && v.rp != null).length,
+        };
         scan(INDEXES);
       }
     }

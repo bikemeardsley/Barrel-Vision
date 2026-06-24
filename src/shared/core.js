@@ -56,6 +56,7 @@
   const CONFIG = {
     year: new Date().getFullYear(),
     cacheTtlHours: 12,           // re-fetch Savant at most twice a day
+    plCacheTtlDays: 7,           // Pitcher List rankings are weekly - fetch at most once a week
     minBattedBalls: 10,          // keep part-time guys (Barrel Hunting targets), not just qualifiers
     scanDebounceMs: 400,         // coalesce MutationObserver bursts - ESPN's live scores mutate constantly
     hideResearchColumns: true,   // hide ESPN's low-value Research cols (PR15 / %ROST / +/-) to make room
@@ -98,6 +99,20 @@
     // independent of ESPN's list-filter window (the old roster-list scrape got this wrong when the
     // list was filtered to Last 7/15/30/Projected).
     mlbStatsGameLog: (id, year) => `https://statsapi.mlb.com/api/v1/people/${id}/stats?stats=gameLog&group=pitching&season=${year}&gameType=R`,
+
+    // Pitcher List weekly rankings - SP "The List" (Top 100) + reliever "Top 50 Closers". Published as
+    // weekly ARTICLES (no API), but the ranking itself is a clean, server-rendered <table class="list">
+    // (verified live 2026: td.rank / td.name>a / td.team / span.tier - present in the raw HTML, no JS
+    // needed). We resolve the latest week's article via the category RSS feed (newest <link> first; the
+    // category HTML index is the fallback if the feed shape changes), then regex-parse the FIRST list
+    // table. Only factual rank+name+slug+team+tier are taken - never the prose write-ups (those stay on
+    // PL's site; see PROJECT doc §5/§2). Parsing + the article-URL regexes live in background.js.
+    pitcherList: {
+      spFeed:  'https://pitcherlist.com/category/fantasy/starting-pitchers/the-list/feed/',
+      rpFeed:  'https://pitcherlist.com/category/fantasy/relief-pitchers/reliever-ranks/feed/',
+      spIndex: 'https://pitcherlist.com/category/fantasy/starting-pitchers/the-list/',
+      rpIndex: 'https://pitcherlist.com/category/fantasy/relief-pitchers/reliever-ranks/',
+    },
 
     // ESPN's player-table DOM. Class names are obfuscated and shift when ESPN reships their frontend.
     selectors: {
@@ -195,6 +210,8 @@
     // v2: the hand index now also carries the player's MLBAM id (used to compute QS).
     cacheKey: (year) => `barrelVision:index:v2:${year}`,      // chrome.storage.local
     qsKey: (year) => `barrelVision:qs:v1:${year}`,            // chrome.storage.local (per-pitcher QS cache)
+    plKey: (year) => `barrelVision:pl:v1:${year}`,            // chrome.storage.local (weekly Pitcher List cache)
+    plOverride: (year) => `barrelVision:plOverride:v1:${year}`, // chrome.storage.local (manual-paste fallback)
   };
 
   root.BV = {

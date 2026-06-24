@@ -146,6 +146,54 @@
   });
 
   // ---------------------------------------------------------------------------
+  // Pitcher List ranks: a PL-only refresh (REFRESH_PL) that leaves the Savant /
+  // StatsAPI data untouched. "Fetch latest ranks" and "Clear" pull live
+  // (force:true); "Save override" stores the pasted lists and applies them for
+  // the current week (force:false → the SW honors the just-saved override). The
+  // SW rewrites the index cache so open ESPN tabs adopt the change live.
+  // ---------------------------------------------------------------------------
+  const plOverrideKey = () => BV.STORAGE.plOverride(BV.CONFIG.year);
+
+  async function refreshPl(msg, label, btn) {
+    if (btn) btn.disabled = true;
+    try {
+      const resp = await sendMessage(msg);
+      if (resp && resp.ok) {
+        const c = resp.counts || {};
+        setStatus(`${label} — ${c.plSp || 0} SP · ${c.plRp || 0} closers ranked.`);
+      } else {
+        setStatus('Pitcher List refresh failed: ' + ((resp && resp.error) || 'unknown error'));
+      }
+    } catch (e) { setStatus('Pitcher List refresh failed: ' + e.message); }
+    finally { if (btn) btn.disabled = false; }
+  }
+
+  document.getElementById('bv-pl-fetch').addEventListener('click', e => {
+    setStatus('Fetching latest Pitcher List ranks…');
+    refreshPl({ type: 'REFRESH_PL', force: true }, 'Pitcher List refreshed', e.currentTarget);
+  });
+
+  document.getElementById('bv-pl-save').addEventListener('click', async e => {
+    const btn = e.currentTarget;
+    const sp = document.getElementById('bv-pl-sp').value.trim();
+    const rp = document.getElementById('bv-pl-rp').value.trim();
+    if (!sp && !rp) { setStatus('Paste at least one list, or use Fetch latest ranks to pull from the web.'); return; }
+    setStatus('Saving override…');
+    try { await chrome.storage.local.set({ [plOverrideKey()]: { sp, rp, ts: Date.now() } }); } catch (_) {}
+    // force:false so the SW honors the override we just saved (this week only; auto-fetch resumes after).
+    refreshPl({ type: 'REFRESH_PL', force: false }, 'Override saved (this week)', btn);
+  });
+
+  document.getElementById('bv-pl-clear').addEventListener('click', async e => {
+    const btn = e.currentTarget;
+    document.getElementById('bv-pl-sp').value = '';
+    document.getElementById('bv-pl-rp').value = '';
+    setStatus('Clearing override…');
+    try { await chrome.storage.local.remove(plOverrideKey()); } catch (_) {}
+    refreshPl({ type: 'REFRESH_PL', force: true }, 'Override cleared, fetched latest', btn);
+  });
+
+  // ---------------------------------------------------------------------------
   // Init
   // ---------------------------------------------------------------------------
   (async () => {
@@ -155,6 +203,13 @@
       PREFS = mergePrefs(obj[BV.STORAGE.prefs]);
       document.getElementById('bv-debug').checked = obj[BV.STORAGE.debug] === true;
     } catch (_) { /* defaults already set */ }
+    try {
+      const o = (await chrome.storage.local.get(plOverrideKey()))[plOverrideKey()];
+      if (o) {
+        document.getElementById('bv-pl-sp').value = o.sp || '';
+        document.getElementById('bv-pl-rp').value = o.rp || '';
+      }
+    } catch (_) { /* no override saved */ }
     render();
   })();
 })();
