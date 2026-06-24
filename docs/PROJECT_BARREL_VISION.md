@@ -46,10 +46,10 @@ Those need stored, joined, multi-season data and belong in a heavier build if ev
   popup, with prefs in `chrome.storage.sync` and live re-shading via `storage.onChanged` (dropping the
   userscript's reload-on-save). See §3.
 - **One shared core, no bundler.** `src/shared/core.js` holds everything used in 2+ contexts (CONFIG,
-  `normName`, formatters, `cellColor`, `handWord`, `defaultPrefs`) and assigns to `globalThis.BV`. It
-  is loaded by the SW via `importScripts`, by the content script as the first entry in the
-  `content_scripts` js list, and by the popup via `<script src>`. **HARD RULE:** CONFIG carries real
-  functions (`fmt`/`derive`/`cellColor`), and functions are silently dropped by JSON serialization, so
+  `normName`, formatters, `cellSignal`/`cellColor`, `handWord`, `defaultPrefs`) and assigns to
+  `globalThis.BV`. It is loaded by the SW via `importScripts`, by the content script as the first entry in
+  the `content_scripts` js list, and by the popup via `<script src>`. **HARD RULE:** CONFIG carries real
+  functions (`fmt`/`derive`), and functions are silently dropped by JSON serialization, so
   CONFIG is shared only by loading the file — it is never message-passed or stored. The wire/cache
   carry plain data only.
 - **Minimal permissions.** `permissions: ["storage"]`; `host_permissions` only
@@ -162,7 +162,7 @@ barrel-vision/
 │   ├── content.js               DOM injection, observer, HUD, storage.onChanged → recolorAll
 │   ├── content.css              overlay styles (the GM_addStyle subset that applies on ESPN)
 │   ├── popup.html / popup.js / popup.css   thresholds UI + Refresh + debug toggle → storage.sync
-│   ├── shared/core.js           CONFIG + normName + formatters + cellColor + handWord (globalThis.BV)
+│   ├── shared/core.js           CONFIG + normName + formatters + cellSignal/cellColor + handWord (globalThis.BV)
 │   └── icons/                   PNG icons (currently README only; manifest ships no icons key so it loads)
 ├── userscript/
 │   └── espn-savant-overlay.user.js   origin artifact, v0.8.8 (not part of the build)
@@ -382,6 +382,73 @@ insufficient.
 
 ## 15. Changelog
 
+- **v0.13.0 (day-of matchup ratings)** —
+  - **Matchup ratings inline by the OPP**, football-OPRK-style (green→gold→red; red is the app `#d62e2e`).
+    - Both marks render in the **OPP cell** after the team abbrev (the wrapper is set inline-flex so they
+      middle-align); the opposing pitcher's hand stays in the STATUS cell's parens.
+    - **Batters:** a **6-tier symbol** ("`MIL ▲`") — ▲▲ elite · ▲ good · ⟋ lean-good · ⟍ lean-tough · ▼ tough
+      · ▼▼ very tough (green / gold / red by pair). Goodness uses the **odds-ratio / log5** method (per the
+      research review): the batter's **expected wOBA vs today's hand** — overall `woba` + a **heavily
+      regressed platoon delta** (The Book constants: ~2200 PA RHB / ~1000 PA LHB toward the league platoon
+      split, the OPS split converted to ~wOBA; switch hitters get no delta) — combined multiplicatively with
+      the opposing starter's **xwOBA allowed** and scaled to 0–1. So batter and pitcher are symmetric and an
+      elite arm (e.g. Ohtani) drags an otherwise-good platoon edge down to even. The vs-hand OPS split is
+      only a small refinement loaded async (`getSplits`); the symbol renders immediately on the league platoon.
+    - **Pitchers:** the **opponent-team offense rank** as a small badge ("`MIL 24`"; 1 = best offense =
+      toughest). Shown only when **starting** — ESPN's "PP" probable badge (`.playerinfo__start-indicator`) —
+      or for relievers; a SP+RP arm that's also on Pitcher List's SP "The List" is treated as a starter
+      (needs PP), so pure/relabeled SPs off their day show nothing.
+    - The opposing pitcher's **handedness is inserted into ESPN's parens** ("`(Drohan)`" → "`(Drohan • L)`"
+      — the bullet keeps L/R from reading as a last initial; reverted on teardown).
+  - **Keyed off ESPN's own opponent cell** (`.opp` team-link href + the probable in `.game-status`), so no
+    schedule API. The opponent abbrev is read from the link href so the away "`@`" doesn't break it. ESPN
+    shows the pitcher's **last name only**, resolved via a new `HAND_BY_TEAM_LAST` index (team id + last
+    name) — the hand index now carries `currentTeam.id`. Opponent abbrev → team id via a `teamAbbr` map
+    (+ a small ESPN→StatsAPI alias table).
+  - **New data:** team offense (`teamOff`: teams + team-hitting → OPS rank, folded into the index) and
+    per-batter platoon splits (`getSplits`, `GET_SPLITS` batch message, 24h cache like `getQS`; the content
+    script requests the on-screen batters and fills the grade placeholders async). Cache key **v3 → v4**.
+  - HUD placeholder is now **"Loading…"** (it's no longer Savant-only).
+- **v0.12.0 (Savant value sliders + bubble highlighting + Show/Highlight + PL toggles)** —
+  - **New source: Savant percentile-rankings feed** (`percentile` / `percentilePit` in `CONFIG.savant`),
+    a sixth Savant CSV carrying the 0–100 percentiles behind the player-page sliders. Kept in a **separate
+    `pct` index** (`{ bat, pit }`, each `normName → [record]`), deliberately **not** merged into `bat`/`pit`
+    — the percentile CSV reuses column names like `brl_percent` that would clobber the raw values there.
+    Optional per-type (a failure just hides that type's sliders). Cache key bumped **v2 → v3**. `rowName`
+    now also flips `player_name` ("Last, First") so the percentile feed joins on the existing `normName`.
+  - **Collapsible "Savant percentile sliders" in the player card** (beneath Advanced Stats, before ESPN's
+    next-start box). Like Savant's page, each row shows the **actual stat value** with the bar positioned
+    at the player's **percentile**: `CONFIG.percentiles[kind]` pairs a `pct` column (position) with the
+    `src`/`fmt` of a real value pulled from the leaderboards we already fetch (so no new network). Curated
+    to value-backed metrics (xwOBA/xBA/xSLG/Barrel%/Hard-Hit%/Avg EV + Bat Speed/Squared-Up% for hitters;
+    xERA + the contact metrics for pitchers); rendered natively, red → grey → blue by percentile.
+  - **Pitcher List hitter ranks.** Added the weekly **"Top 150 Hitters"** list (`hitFeed`/`hitIndex`),
+    which uses the identical `<table class="list">` markup, so the existing parser handles it. `buildPlMap`
+    now also carries an `h` rank; the `plBadge` is generalized by row kind (SP/closer on pitchers, hitter
+    rank on batters) and shows on batter rows + the batter player-card. A third per-week override textarea
+    ("hitters") was added to the popup, mirroring the SP/closer fallbacks.
+  - **Pitcher List display toggles** (`STORAGE.plPrefs`, sync: `{on, sp, rp, h}`; `BV.plPick` resolves
+    which rank to show). A master toggle plus per-list toggles (SP / closers / hitters); a list shows only
+    if master AND its own flag are on. The popup's PL section is no longer a `<details>` — a header with the
+    master toggle, and a body (per-list toggles + override) that hides when the master is off. Content
+    reacts live (`rebuildPlBadges`). **Future:** the title could become a dropdown of rank sources
+    (Pitcher List, RotoBaller, …).
+  - **Per-column Show vs Highlight + handedness toggles.** Each column pref now has `show` (is the column
+    displayed) in addition to `enabled` (is it highlighted — unchanged, so saved prefs migrate for free).
+    Popup columns: **Show** (ESPN's OPS/ERA/WHIP are read-only on — we never add/remove ESPN's own columns)
+    and **Highlight** (the old "On"). Content respects `show` when injecting (`shownCols`); a live Show
+    change re-injects list columns (`showSig` detects it vs a recolor-only change). Each popup section also
+    leads with a **Handedness** show-only row (`handBat`/`handPit` prefs; `handShown`/`handSig` in content)
+    gating the "• Righty/Lefty" span. Sections renamed **Hitters → Batters** to match ESPN; the PL list
+    toggles read **Starters / Closers / Batters**.
+  - **Cell highlighting → tint the number.** The shading primitive is `cellSignal(prefs, key, raw)` (signed
+    magnitude + side); `cellColor` is derived from it (legacy `'fill'`). The content script paints via a
+    single `SHADE_STYLE` constant — `'tint'` default (tints the value red/blue via `!important` so it beats
+    ESPN's own colour, plus a faint cell wash; deeper the further past the threshold) | `'text'` (number
+    only) | `'bubble'` | `'stripe'` | `'bar'` | `'fill'`. All cells (lists + Advanced table) paint through
+    the one node painter (`paintCell`).
+  - **Popup header tidy.** The master on/off toggle is left-aligned next to the title/version; the "Send a
+    tip" button is pushed to the far right (flex spacer).
 - **v0.11.0 (master on/off + PL link tidy)** —
   - **Master on/off switch.** A new `chrome.storage.sync` `enabled` flag (absent = on) with two entry
     points that write the same key: an **iOS-style toggle at the right of the popup header**, and a

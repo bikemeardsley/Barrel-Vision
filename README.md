@@ -16,19 +16,22 @@ Tampermonkey userscript (kept in [`userscript/`](userscript/) as the origin arti
 
 ## What it looks like
 
-Savant's contact-quality columns land right next to ESPN's own stats, shaded so the read is instant —
-**red = better than your threshold, blue = worse,** deeper shade = further from it. Handedness and
-Pitcher List weekly ranks ride along after each pitcher's position.
+Savant's contact-quality columns land right next to ESPN's own stats, the numbers tinted (with a faint
+cell wash) so the read is instant — **red = better than your threshold, blue = worse,** deeper colour =
+further from it. Handedness and Pitcher List weekly ranks ride along after each player's position.
 
 ![Barrel Vision metric columns on an ESPN roster, hitters and pitchers, with red/blue threshold shading](docs/images/roster.png)
 
 Open a player card and the same metrics appear as a native-looking **Advanced Stats** table, with
-ESPN's own columns condensed (OBP+SLG → OPS for hitters, W+L → QS for pitchers) and a link straight to
-the player's Savant page.
+ESPN's own columns condensed (OBP+SLG → OPS for batters, W+L → QS for pitchers) and a link straight to
+the player's Savant page. Below it, a collapsible **Savant percentile sliders** section reproduces the
+player-page sliders — the actual stat value with the bar at the player's percentile (red → grey → blue,
+100 = elite) — without leaving ESPN.
 
 ![Barrel Vision Advanced Stats table inside the ESPN player-card modal](docs/images/modal.png)
 
-Everything is driven from the **toolbar popup** — per-column thresholds, a master on/off switch, and a
+Everything is driven from the **toolbar popup** — per-column **Show** + **Highlight** toggles and
+thresholds, Pitcher List on/off (master + per-list), a master on/off switch, and a
 weekly Pitcher List refresh. Changes apply live, with no page reload.
 
 <p align="center">
@@ -39,21 +42,35 @@ weekly Pitcher List refresh. Changes apply live, with no page reload.
 
 ## What it shows
 
-**Hitters:** barrel%, hard-hit%, xwOBA, the **xwOBA−wOBA gap** (derived), avg EV, bat speed, squared-up%.
+**Batters:** barrel%, hard-hit%, xwOBA, the **xwOBA−wOBA gap** (derived), avg EV, bat speed, squared-up%.
 **Pitchers:** xERA, the **ERA−xERA gap** (derived), opponent xwOBA, opponent barrel%, opponent hard-hit%.
 
 It also:
-- **Shades** ESPN's own OPS (hitters) and ERA/WHIP (pitchers) with the same threshold gradient.
-- Adds **batting/throwing handedness** from the MLB StatsAPI ("Milwaukee Brewers • Righty").
-- Surfaces **Pitcher List weekly ranks** inline after a pitcher's handedness as **"• PL #N"** — SP rank
-  from "The List" (Top 100) or closer rank from the reliever ranks, with the source list + tier in the
-  tooltip. In the player card the badge links to the player's Pitcher List page.
+- **Shades** ESPN's own OPS (batters) and ERA/WHIP (pitchers) with the same threshold gradient.
+- Adds **batting/throwing handedness** from the MLB StatsAPI ("Milwaukee Brewers • Righty"); toggleable
+  per section (batters / pitchers).
+- Adds **day-of matchup ratings** in the OPP column, football-style (green → gold → red). **Batters** get a
+  **6-tier symbol** (▲▲ ▲ ⟋ ⟍ ▼ ▼▼ → `MIL ▲`) from an odds-ratio of their expected wOBA vs the opposing
+  starter's hand (overall wOBA + a heavily-regressed platoon delta) and that starter's xwOBA allowed — so a
+  good platoon edge vs an ace lands as even; the pitcher's hand shows in the STATUS cell as `(Drohan • L)`. **Pitchers** get the **opponent-offense rank** badge (`MIL 24`), shown only when
+  they're starting (the PP badge) or are a reliever. Read off ESPN's own opponent/probable cell — no
+  schedule API.
+- Surfaces **Pitcher List weekly ranks** inline after a player's handedness as **"• PL #N"** — SP rank
+  from "The List" (Top 100) or closer rank from the reliever ranks for pitchers, and the **"Top 150
+  Hitters"** rank for batters, with the source list + tier in the tooltip. In the player card the badge
+  links to the player's Pitcher List page.
 - In the player card, **condenses** columns (OBP+SLG → OPS, W+L → QS) and adds an **Advanced Stats**
   table plus a **Savant Page** link. **QS (Quality Starts)** is computed from the pitcher's StatsAPI
   game log (≥6 IP & ≤3 ER per start), so it's the true season value — not whatever ESPN's stat-filter
   window happens to show.
-- Highlights every metric cell: **red = better than your threshold, blue = worse**, deeper shade =
-  further from the threshold.
+- Adds a collapsible **Savant percentile sliders** section in the player card — like Savant's own page,
+  the actual stat value with the bar at the player's percentile (xwOBA, xBA, xSLG, barrel%, hard-hit%,
+  avg EV, bat speed, squared-up% for batters; xERA + contact metrics for pitchers), rendered natively
+  (no iframe) and coloured red → grey → blue like Savant itself.
+- Highlights every metric cell by **tinting the number** (plus a faint cell wash): **red = better than
+  your threshold, blue = worse**, deeper colour = further from the threshold — reads at a glance, stays legible.
+- Per column you can toggle **Show** (display the column at all) and **Highlight** (its colouring)
+  independently; the Pitcher List ranks have their own on/off (master + per-list).
 - Can be turned off entirely from a **master switch** (popup) or a **right-click toggle** on the toolbar
   icon — the overlay tears down live (no reload), and while off it fetches nothing.
 
@@ -136,8 +153,10 @@ Nothing from your ESPN session is read, stored, or sent anywhere. Full details i
 
 ## Data sources & verified quirks
 
-Five public Baseball Savant CSV leaderboards, the MLB StatsAPI (roster + per-pitcher game logs), and the
-two public Pitcher List weekly ranking articles. Headers were verified against the live feeds (2026
+Six public Baseball Savant CSV leaderboards (the five contact-quality feeds plus the percentile-rankings
+feed behind the player-card sliders), the MLB StatsAPI (roster + per-pitcher game logs), and the three
+public Pitcher List weekly ranking articles (SP, closers, batters). Headers were verified against the
+live feeds (2026
 in-season). Three counterintuitive quirks are handled deliberately and annotated in the code so they
 don't get "corrected" later:
 
@@ -169,10 +188,16 @@ scripts/     package.ps1 — zips src/ for store upload
 
 ## Status
 
-`v0.11.0` — data layer and DOM logic ported and verified against the live ESPN DOM; Pitcher List ranks,
-per-pitcher Quality Starts, and a live master on/off switch added on top of the original port. See the
-changelog in [`docs/PROJECT_BARREL_VISION.md` §15](docs/PROJECT_BARREL_VISION.md) and the store-submission
-checklist in [`docs/PUBLISHING.md`](docs/PUBLISHING.md).
+`v0.13.0` — added **day-of matchup ratings** by the OPP (batters: a 6-tier ▲▲/▲/⟋/⟍/▼/▼▼ symbol blending their OPS vs the
+opposing starter's hand with that starter's quality, hand shown as `(Drohan • L)`; starting pitchers: an
+opponent-offense rank badge in the OPP column), read off ESPN's own opponent cell. Built on
+`v0.12.0` — player-card **Savant percentile sliders** (a sixth Savant feed; actual values on Savant-style
+bars), **Pitcher List "Top 150 Hitters" ranks** (on batter rows), per-column **Show** + **Highlight**
+toggles, **Pitcher List on/off** (master + per-list) and handedness toggles, and cell highlighting as a
+**tinted number + faint wash** — all on top of `v0.11.0`'s ported data layer, Pitcher List ranks,
+per-pitcher Quality Starts, and live master on/off switch. See the changelog in
+[`docs/PROJECT_BARREL_VISION.md` §15](docs/PROJECT_BARREL_VISION.md) and the store-submission checklist
+in [`docs/PUBLISHING.md`](docs/PUBLISHING.md).
 
 ## License
 

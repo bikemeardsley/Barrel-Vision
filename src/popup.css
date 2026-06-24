@@ -19,15 +19,14 @@ body {
 .bv-title { font-weight: 700; font-size: 15px; }
 .bv-ver { color: #999; font-size: 11px; }
 
-/* Master on/off, grouped at the right of the header (just before the BMC button). */
+/* Master on/off, kept left next to the title/version. */
 .bv-master {
-  margin-left: auto;                 /* push the master toggle + BMC button to the right of the header */
-  display: inline-flex; align-items: center; gap: 7px;
+  display: inline-flex; align-items: center; gap: 7px;   /* sits just after the version, on the left */
 }
 .bv-master-lab { font-size: 11px; font-weight: 700; color: #888; text-transform: uppercase; letter-spacing: .4px; min-width: 18px; }
 
 .bv-tip {
-  margin-left: 0;                    /* sits just right of the master toggle (header gap handles spacing) */
+  margin-left: auto;                 /* the flex spacer: pushes the tip button to the far right */
   display: inline-flex; line-height: 0;
 }
 .bv-tip img { height: 30px; width: auto; display: block; }
@@ -66,6 +65,9 @@ input[type="checkbox"] { width: 15px; height: 15px; cursor: pointer; accent-colo
 .bv-switch input[type="checkbox"]:checked + .bv-slider { background: #d62e2e; }     /* app red when on */
 .bv-switch input[type="checkbox"]:checked + .bv-slider::before { transform: translateX(14px); }
 .bv-switch input[type="checkbox"]:focus-visible + .bv-slider { box-shadow: 0 0 0 2px rgba(214, 46, 46, .4); }
+/* Read-only switches (e.g. Show for ESPN's own OPS/ERA/WHIP columns - always on, can't be hidden). */
+.bv-switch input[type="checkbox"]:disabled + .bv-slider { opacity: .5; cursor: default; }
+.bv-switch:has(input:disabled) { cursor: default; }
 
 .bv-foot {
   display: flex; justify-content: space-between; align-items: center; gap: 10px;
@@ -83,9 +85,16 @@ input[type="checkbox"] { width: 15px; height: 15px; cursor: pointer; accent-colo
 
 .bv-status { padding: 0 16px 12px; min-height: 16px; color: #4a7; font-size: 12px; }
 
-/* Pitcher List manual-override fallback (collapsed by default - it's a rarely-needed safety net). */
+/* Pitcher List ranks section: a header with a master toggle; the body (per-list toggles + override)
+   shows only when the master is on. */
 .bv-pl { border-top: 1px solid #e6e6e6; padding: 10px 16px 14px; }
-.bv-pl > summary { cursor: pointer; font-weight: 600; font-size: 12px; color: #444; }
+/* Title + master toggle grouped on the LEFT, like the main extension toggle in the header. */
+.bv-pl-head { display: flex; align-items: center; gap: 8px; }
+.bv-pl-title { font-weight: 600; font-size: 12px; color: #444; }
+.bv-pl-body.bv-hidden { display: none; }
+/* Per-list toggles (Starting pitchers / Closers / Hitters). */
+.bv-pl-lists { display: flex; flex-wrap: wrap; gap: 8px 16px; margin: 10px 0 4px; }
+.bv-pl-list { display: flex; align-items: center; gap: 6px; font-size: 12px; color: #444; cursor: pointer; }
 .bv-pl-note { margin: 8px 0; color: #666; font-size: 11px; line-height: 1.4; }
 .bv-pl-note code { background: #f0f0f0; padding: 1px 4px; border-radius: 3px; }
 .bv-pl-lab { display: block; margin: 8px 0 3px; font-size: 11px; font-weight: 600; color: #555; }

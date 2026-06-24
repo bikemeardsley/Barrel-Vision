@@ -26,14 +26,14 @@
   </div>
 
   <p class="bv-note">
-    Red = better than your threshold, blue = worse, deeper shade = further away.
-    Uncheck a row to turn off shading for that column (the value is kept). Values compare in the units
-    shown in each column (SqUp% in %, xwOBA as .xxx). Changes apply live.
+    Red = better than your threshold, blue = worse, stronger mark = further away.
+    <b>Show</b> adds or removes the column; <b>Highlight</b> toggles its colouring (the value is kept).
+    Values compare in the units shown in each column (SqUp% in %, xwOBA as .xxx). Changes apply live.
   </p>
 
   <table class="bv-table" id="bv-table">
     <thead>
-      <tr><th>Column</th><th>On</th><th>Threshold</th><th>Direction</th></tr>
+      <tr><th>Column</th><th>Show</th><th>Threshold</th><th>Highlight</th><th>Direction</th></tr>
     </thead>
     <tbody id="bv-tbody"><!-- rows built in popup.js --></tbody>
   </table>
@@ -48,27 +48,47 @@
 
   <div class="bv-status" id="bv-status" role="status" aria-live="polite"></div>
 
-  <details class="bv-pl">
-    <summary>Pitcher List ranks</summary>
-    <p class="bv-pl-note">
-      Ranks are fetched automatically each week. <b>Fetch latest ranks</b> pulls them now (e.g. right
-      after a new list drops). If a week fails to parse (e.g. they change their page), paste the rankings
-      below as a fallback — the article's list or simple lines like <code>1 Player Name</code> — and
-      <b>Save</b>. A pasted override applies for that week only; auto-fetch then resumes. <b>Clear</b>
-      drops it and re-fetches now.
-    </p>
-    <div class="bv-pl-fetchrow">
-      <button type="button" id="bv-pl-fetch">Fetch latest ranks</button>
+  <!-- Pitcher List ranks. The master toggle shows/hides the inline "• PL #N" badges (and this section's
+       body). FUTURE: the title could become a dropdown of rank sources (Pitcher List, RotoBaller, …). -->
+  <div class="bv-pl">
+    <div class="bv-pl-head">
+      <span class="bv-pl-title">Pitcher List ranks</span>
+      <span class="bv-master" title="Show Pitcher List ranks on players">
+        <span class="bv-master-lab" id="bv-pl-on-lab">On</span>
+        <label class="bv-switch"><input type="checkbox" id="bv-pl-on" checked aria-label="Show Pitcher List ranks"><span class="bv-slider"></span></label>
+      </span>
     </div>
-    <label class="bv-pl-lab" for="bv-pl-sp">Override — starting pitchers ("The List")</label>
-    <textarea id="bv-pl-sp" class="bv-pl-ta" rows="4" placeholder="1 Jacob Misiorowski&#10;2 Paul Skenes&#10;3 Cristopher Sánchez&#10;…"></textarea>
-    <label class="bv-pl-lab" for="bv-pl-rp">Override — closers (saves)</label>
-    <textarea id="bv-pl-rp" class="bv-pl-ta" rows="4" placeholder="1 Mason Miller&#10;2 Jhoan Duran&#10;3 Josh Hader&#10;…"></textarea>
-    <div class="bv-pl-btns">
-      <button type="button" id="bv-pl-clear">Clear override</button>
-      <button type="button" id="bv-pl-save">Save override</button>
+
+    <div class="bv-pl-body" id="bv-pl-body">
+      <!-- Per-list toggles. A list shows only when the master toggle AND its own toggle are on. -->
+      <div class="bv-pl-lists">
+        <label class="bv-pl-list"><span class="bv-switch"><input type="checkbox" id="bv-pl-on-sp" checked><span class="bv-slider"></span></span> Starters</label>
+        <label class="bv-pl-list"><span class="bv-switch"><input type="checkbox" id="bv-pl-on-rp" checked><span class="bv-slider"></span></span> Closers</label>
+        <label class="bv-pl-list"><span class="bv-switch"><input type="checkbox" id="bv-pl-on-hit" checked><span class="bv-slider"></span></span> Batters</label>
+      </div>
+
+      <p class="bv-pl-note">
+        Ranks are fetched automatically each week. <b>Fetch latest ranks</b> pulls them now (e.g. right
+        after a new list drops). If a week fails to parse (e.g. they change their page), paste the rankings
+        below as a fallback — the article's list or simple lines like <code>1 Player Name</code> — and
+        <b>Save</b>. A pasted override applies for that week only; auto-fetch then resumes. <b>Clear</b>
+        drops it and re-fetches now.
+      </p>
+      <div class="bv-pl-fetchrow">
+        <button type="button" id="bv-pl-fetch">Fetch latest ranks</button>
+      </div>
+      <label class="bv-pl-lab" for="bv-pl-sp">Override — starters ("The List")</label>
+      <textarea id="bv-pl-sp" class="bv-pl-ta" rows="4" placeholder="1 Jacob Misiorowski&#10;2 Paul Skenes&#10;3 Cristopher Sánchez&#10;…"></textarea>
+      <label class="bv-pl-lab" for="bv-pl-rp">Override — closers (saves)</label>
+      <textarea id="bv-pl-rp" class="bv-pl-ta" rows="4" placeholder="1 Mason Miller&#10;2 Jhoan Duran&#10;3 Josh Hader&#10;…"></textarea>
+      <label class="bv-pl-lab" for="bv-pl-hit">Override — batters ("Top 150 Hitters")</label>
+      <textarea id="bv-pl-hit" class="bv-pl-ta" rows="4" placeholder="1 Shohei Ohtani&#10;2 Juan Soto&#10;3 Aaron Judge&#10;…"></textarea>
+      <div class="bv-pl-btns">
+        <button type="button" id="bv-pl-clear">Clear override</button>
+        <button type="button" id="bv-pl-save">Save override</button>
+      </div>
     </div>
-  </details>
+  </div>
 
   <!-- No inline scripts/handlers (extension-page CSP forbids them). core.js first, then popup.js. -->
   <script src="shared/core.js"></script>

@@ -47,9 +47,12 @@ function parseCsv(text) {
 }
 
 function rowName(r) {
-  // Batted-ball/expected feeds use "last_name, first_name"; bat-tracking uses "name" in the same
-  // "Last, First" text. Treat any comma-bearing value as Last, First and flip it.
-  const lastFirst = r['last_name, first_name'] || (r.name && r.name.includes(',') ? r.name : '');
+  // Batted-ball/expected feeds use "last_name, first_name"; bat-tracking uses "name", percentile-rankings
+  // uses "player_name" - both in the same "Last, First" text. Treat any comma-bearing value as Last,
+  // First and flip it (Savant is consistent: a comma in a name field always means "Last, First").
+  const lastFirst = r['last_name, first_name']
+    || (r.name && r.name.includes(',') ? r.name : '')
+    || (r.player_name && r.player_name.includes(',') ? r.player_name : '');
   if (lastFirst) {
     const [last, first] = lastFirst.split(',').map(s => (s || '').trim());
     return `${first} ${last}`;
@@ -110,6 +113,16 @@ async function buildFresh(forcePl) {
     ]);
   } catch (e) { console.warn(`[Barrel Vision] pitcher feeds skipped: ${e.message}`); }
 
+  // Savant percentile rankings (the 0-100 values behind the player-page sliders) - one CSV per type,
+  // kept in a SEPARATE index (NOT merged into bat/pit: the percentile CSV reuses column names like
+  // brl_percent that would clobber the raw values in those feeds). Each is optional on its own; a
+  // failure just means that type's sliders don't render. name->[record] like the other Savant indexes.
+  const pct = { bat: {}, pit: {} };
+  try { pct.bat = await mergeFeeds([{ label: 'percentile-bat', url: S.percentile(Y), idField: 'player_id' }]); }
+  catch (e) { console.warn(`[Barrel Vision] batter percentiles skipped: ${e.message}`); }
+  try { pct.pit = await mergeFeeds([{ label: 'percentile-pit', url: S.percentilePit(Y), idField: 'player_id' }]); }
+  catch (e) { console.warn(`[Barrel Vision] pitcher percentiles skipped: ${e.message}`); }
+
   // Handedness from MLB StatsAPI, keyed by normalized name -> { bats, throws, slug } (L/R/S codes).
   // Optional: if it fails, handedness simply doesn't render and everything else is unaffected.
   // NOTE: a flat name->object map (NOT arrays like the Savant feeds) - the content script reads it directly.
@@ -119,9 +132,26 @@ async function buildFresh(forcePl) {
     for (const p of (json.people || [])) {
       const k = BV.normName(p.fullName || p.firstLastName || `${p.firstName || ''} ${p.lastName || ''}`);
       if (!k) continue;
-      hand[k] = { bats: p.batSide?.code || '', throws: p.pitchHand?.code || '', slug: p.nameSlug || '', id: p.id || '' };
+      // team (currentTeam.id) lets the content script resolve the opposing probable pitcher by team +
+      // last name (ESPN shows the pitcher's last name only) for the matchup ratings.
+      hand[k] = { bats: p.batSide?.code || '', throws: p.pitchHand?.code || '', slug: p.nameSlug || '', id: p.id || '', team: p.currentTeam?.id || '' };
     }
   } catch (e) { console.warn(`[Barrel Vision] StatsAPI handedness skipped: ${e.message}`); }
+
+  // Team offense for the pitcher matchup: rank all 30 teams by season OPS (rank 1 = best offense = the
+  // TOUGHEST matchup for a pitcher). teamAbbr maps StatsAPI abbreviation -> id so the content script can
+  // turn ESPN's opponent abbrev into a team. Best-effort: a failure just hides the pitcher grades.
+  let teamOff = {}, teamAbbr = {};
+  try {
+    const teams = (JSON.parse(await fetchText(BV.CONFIG.mlbTeams(Y))).teams) || [];
+    for (const t of teams) if (t.id && t.abbreviation) teamAbbr[t.abbreviation.toUpperCase()] = t.id;
+    const hit = JSON.parse(await fetchText(BV.CONFIG.mlbTeamHitting(Y)));
+    const rows = ((hit.stats && hit.stats[0] && hit.stats[0].splits) || [])
+      .map(s => ({ id: s.team && s.team.id, ops: parseFloat(s.stat && s.stat.ops) }))
+      .filter(r => r.id && Number.isFinite(r.ops))
+      .sort((a, b) => b.ops - a.ops);                              // highest OPS first -> rank 1
+    rows.forEach((r, i) => { teamOff[r.id] = { ops: r.ops, rank: i + 1 }; });
+  } catch (e) { console.warn(`[Barrel Vision] team offense skipped: ${e.message}`); }
 
   // Pitcher List weekly ranks, keyed by normalized name -> { sp?, rp?, slug, tier, team } (a flat
   // name->object map like `hand`, NOT arrays - the content script reads it directly and renders it
@@ -132,18 +162,22 @@ async function buildFresh(forcePl) {
   try { pl = await getPL(forcePl); }
   catch (e) { console.warn(`[Barrel Vision] Pitcher List skipped: ${e.message}`); }
 
-  return { bat, pit, hand, pl };
+  return { bat, pit, pct, hand, pl, teamOff, teamAbbr };
 }
 
 function countsOf(indexes) {
   const pl = indexes.pl || {};
   const plVals = Object.values(pl);
+  const pct = indexes.pct || {};
   return {
     bat: BV.countIndex(indexes.bat),
     pit: BV.countIndex(indexes.pit),
+    pctBat: BV.countIndex(pct.bat),
+    pctPit: BV.countIndex(pct.pit),
     hand: Object.keys(indexes.hand || {}).length,
     plSp: plVals.filter(v => v && v.sp != null).length,
     plRp: plVals.filter(v => v && v.rp != null).length,
+    plHit: plVals.filter(v => v && v.h != null).length,
   };
 }
 
@@ -202,6 +236,43 @@ async function getQS(id) {
   map[id] = { qs, ts: Date.now() };
   try { await chrome.storage.local.set({ [key]: map }); } catch (_) {}
   return qs;
+}
+
+// ---------------------------------------------------------------------------
+// Per-batter platoon splits (vs LHP / vs RHP) for the matchup ratings. One StatsAPI call per batter,
+// cached 24h (splits move slowly day to day). Batched: the content script sends the ids of the batters
+// currently on screen; we return { id: { l:{ops,pa}, r:{ops,pa} } } for all, fetching only cache misses.
+// ---------------------------------------------------------------------------
+async function getSplits(ids) {
+  const key = BV.STORAGE.splitsKey(BV.CONFIG.year);
+  let map = {};
+  try { const o = await chrome.storage.local.get(key); map = o[key] || {}; } catch (_) {}
+  const now = Date.now(), ttl = BV.CONFIG.cacheTtlHours * 2 * 3600e3;   // 24h (2x the Savant 12h window)
+  const out = {}, need = [];
+  for (const id of (ids || [])) {
+    const hit = map[id];
+    if (hit && (now - hit.ts) < ttl) out[id] = hit.v;
+    else if (id) need.push(id);
+  }
+  await Promise.all(need.map(async (id) => {
+    try {
+      const j = JSON.parse(await fetchText(BV.CONFIG.mlbStatsSplits(id, BV.CONFIG.year)));
+      const splits = (j.stats && j.stats[0] && j.stats[0].splits) || [];
+      const rec = { l: null, r: null };
+      for (const s of splits) {
+        const code = s.split && s.split.code;
+        const ops = parseFloat(s.stat && s.stat.ops);
+        const pa = +((s.stat && s.stat.plateAppearances) || 0);
+        if (!Number.isFinite(ops)) continue;
+        if (code === 'vl') rec.l = { ops, pa };
+        else if (code === 'vr') rec.r = { ops, pa };
+      }
+      map[id] = { v: rec, ts: now };
+      out[id] = rec;
+    } catch (_) { out[id] = null; }                 // leave failures uncached so we retry next time
+  }));
+  try { await chrome.storage.local.set({ [key]: map }); } catch (_) {}
+  return out;
 }
 
 // ---------------------------------------------------------------------------
@@ -300,11 +371,11 @@ async function fetchPlList(feedUrl, indexUrl, articleRe, minRows, label) {
   return rows;
 }
 
-// Merge SP + closer rows into a flat normName -> { sp?, rp?, slug, tier, team } map.
-function buildPlMap(spRows, rpRows) {
+// Merge SP + closer + hitter rows into a flat normName -> { sp?, rp?, h?, slug, tier, team } map.
+function buildPlMap(spRows, rpRows, hitRows) {
   const pl = {};
   const add = (rows, key) => {
-    for (const r of rows) {
+    for (const r of rows || []) {
       const k = BV.normName(r.name);
       if (!k || r.rank == null) continue;
       const cur = pl[k] || {};
@@ -313,6 +384,7 @@ function buildPlMap(spRows, rpRows) {
   };
   add(spRows, 'sp');
   add(rpRows, 'rp');
+  add(hitRows, 'h');     // hitter rank from the "Top 150 Hitters" list (shown on batter rows)
   return pl;
 }
 
@@ -330,10 +402,11 @@ async function getPL(force) {
     //    resumes on its own (no Clear needed): the paste is treated as "this week only".
     try {
       const o = (await chrome.storage.local.get(overKey))[overKey];
-      if (o && (o.sp || o.rp) && (Date.now() - (o.ts || 0)) < ttl) {
+      if (o && (o.sp || o.rp || o.hit) && (Date.now() - (o.ts || 0)) < ttl) {
         const sp = o.sp ? parsePlText(o.sp) : [];
         const rp = o.rp ? parsePlText(o.rp) : [];
-        if (sp.length || rp.length) return buildPlMap(sp, rp);
+        const hit = o.hit ? parsePlText(o.hit) : [];
+        if (sp.length || rp.length || hit.length) return buildPlMap(sp, rp, hit);
       }
     } catch (_) {}
 
@@ -346,9 +419,10 @@ async function getPL(force) {
 
   // 3) Fetch + parse this week's articles.
   const P = BV.CONFIG.pitcherList;
-  const spRows = await fetchPlList(P.spFeed, P.spIndex, /https:\/\/pitcherlist\.com\/top-100-starting-pitchers[a-z0-9-]*\//i, 50, 'SP');
-  const rpRows = await fetchPlList(P.rpFeed, P.rpIndex, /https:\/\/pitcherlist\.com\/fantasy-reliever-rankings[a-z0-9-]*\//i, 20, 'closers');
-  const pl = buildPlMap(spRows, rpRows);
+  const spRows  = await fetchPlList(P.spFeed,  P.spIndex,  /https:\/\/pitcherlist\.com\/top-100-starting-pitchers[a-z0-9-]*\//i, 50, 'SP');
+  const rpRows  = await fetchPlList(P.rpFeed,  P.rpIndex,  /https:\/\/pitcherlist\.com\/fantasy-reliever-rankings[a-z0-9-]*\//i, 20, 'closers');
+  const hitRows = await fetchPlList(P.hitFeed, P.hitIndex, /https:\/\/pitcherlist\.com\/top-150-hitters-for-fantasy-baseball[a-z0-9-]*\//i, 50, 'batters');
+  const pl = buildPlMap(spRows, rpRows, hitRows);
   try { await chrome.storage.local.set({ [cacheK]: { ts: Date.now(), pl } }); } catch (_) {}
   return pl;
 }
@@ -403,6 +477,12 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
   if (msg.type === 'GET_QS') {
     getQS(msg.id)
       .then(qs => sendResponse({ ok: true, qs }))
+      .catch(err => sendResponse({ ok: false, error: err.message }));
+    return true;
+  }
+  if (msg.type === 'GET_SPLITS') {
+    getSplits(msg.ids)
+      .then(splits => sendResponse({ ok: true, splits }))
       .catch(err => sendResponse({ ok: false, error: err.message }));
     return true;
   }

@@ -17,10 +17,11 @@
   let writeTimer = null;
 
   // key -> {label, group}. ops/era/whip are ESPN stats we shade in place, not Savant columns.
+  // "Batters" matches ESPN's own section name.
   function colMeta() {
     const meta = {};
-    for (const c of BV.CONFIG.columns.bat) meta[c.key] = { label: c.label, group: 'Hitters' };
-    meta.ops = { label: 'OPS', group: 'Hitters' };
+    for (const c of BV.CONFIG.columns.bat) meta[c.key] = { label: c.label, group: 'Batters' };
+    meta.ops = { label: 'OPS', group: 'Batters' };
     for (const c of BV.CONFIG.columns.pit) if (!meta[c.key]) meta[c.key] = { label: c.label, group: 'Pitchers' };
     meta.era = { label: 'ERA', group: 'Pitchers' };
     meta.whip = { label: 'WHIP', group: 'Pitchers' };
@@ -58,23 +59,43 @@
   // ---------------------------------------------------------------------------
   const meta = colMeta();
 
+  // ESPN's own columns - always shown (we don't add/remove ESPN's columns), so "Show" is read-only on.
+  const ESPN_KEYS = new Set(['ops', 'era', 'whip']);
+
   function metricRow(key) {
     const p = PREFS[key] || {};
     const dirLabel = p.dir === 'low' ? 'lower = better' : 'higher = better';
+    const isEspn = ESPN_KEYS.has(key);
+    const shown = isEspn ? true : (p.show !== false);
     return `<tr data-key="${key}">
         <td class="bv-m-lab">${meta[key].label}</td>
-        <td class="bv-m-onc"><label class="bv-switch"><input type="checkbox" class="bv-m-en" ${p.enabled ? 'checked' : ''}><span class="bv-slider"></span></label></td>
+        <td class="bv-m-onc"><label class="bv-switch"><input type="checkbox" class="bv-m-show" ${shown ? 'checked' : ''} ${isEspn ? 'disabled' : ''}><span class="bv-slider"></span></label></td>
         <td><input type="text" class="bv-m-th" value="${fmtTh(key, p.threshold)}" ${p.enabled ? '' : 'readonly'}></td>
+        <td class="bv-m-onc"><label class="bv-switch"><input type="checkbox" class="bv-m-en" ${p.enabled ? 'checked' : ''}><span class="bv-slider"></span></label></td>
         <td class="bv-m-dir">${dirLabel}</td>
       </tr>`;
   }
-  const section = (title, keys) =>
-    `<tr class="bv-sec"><td colspan="4">${title}</td></tr>` + keys.map(metricRow).join('');
+  // A "Show"-only row (no threshold/highlight/direction) - used for the handedness display toggles.
+  function showOnlyRow(key, label) {
+    const shown = (PREFS[key] || {}).show !== false;
+    return `<tr data-key="${key}">
+        <td class="bv-m-lab">${label}</td>
+        <td class="bv-m-onc"><label class="bv-switch"><input type="checkbox" class="bv-m-show" ${shown ? 'checked' : ''}><span class="bv-slider"></span></label></td>
+        <td></td><td></td><td class="bv-m-dir"></td>
+      </tr>`;
+  }
+
+  // Each section leads with a Handedness "Show" toggle, then its metric rows.
+  const section = (title, keys, handKey) =>
+    `<tr class="bv-sec"><td colspan="5">${title}</td></tr>` +
+    showOnlyRow(handKey, 'Handedness') +
+    keys.map(metricRow).join('');
 
   function render() {
-    const hitterKeys = Object.keys(meta).filter(k => meta[k].group === 'Hitters');
+    const batterKeys = Object.keys(meta).filter(k => meta[k].group === 'Batters');
     const pitcherKeys = Object.keys(meta).filter(k => meta[k].group === 'Pitchers');
-    document.getElementById('bv-tbody').innerHTML = section('Hitters', hitterKeys) + section('Pitchers', pitcherKeys);
+    document.getElementById('bv-tbody').innerHTML =
+      section('Batters', batterKeys, 'handBat') + section('Pitchers', pitcherKeys, 'handPit');
   }
 
   // ---------------------------------------------------------------------------
@@ -103,7 +124,10 @@
     const tr = e.target.closest('tr[data-key]');
     if (!tr) return;
     const key = tr.getAttribute('data-key');
-    if (e.target.classList.contains('bv-m-en')) {
+    if (e.target.classList.contains('bv-m-show')) {    // column visibility (ESPN cols are disabled)
+      PREFS[key] = { ...PREFS[key], show: e.target.checked };
+      scheduleWrite();
+    } else if (e.target.classList.contains('bv-m-en')) { // highlight on/off
       const en = e.target.checked;
       const th = tr.querySelector('.bv-m-th');
       if (th) th.readOnly = !en;                       // grey/un-grey without touching the value
@@ -162,13 +186,34 @@
   // ---------------------------------------------------------------------------
   const plOverrideKey = () => BV.STORAGE.plOverride(BV.CONFIG.year);
 
+  // PL display toggles (master + per-list). The master shows/hides the section body and the inline
+  // badges; per-list toggles gate each list. Content script reacts live via chrome.storage.onChanged.
+  let PL_PREFS = BV.defaultPlPrefs();
+  function writePlPrefs() { chrome.storage.sync.set({ [BV.STORAGE.plPrefs]: PL_PREFS }); }
+  function applyPlBody() {
+    const on = PL_PREFS.on !== false;
+    document.getElementById('bv-pl-body').classList.toggle('bv-hidden', !on);
+    document.getElementById('bv-pl-on-lab').textContent = on ? 'On' : 'Off';
+  }
+  document.getElementById('bv-pl-on').addEventListener('change', e => {
+    PL_PREFS = { ...PL_PREFS, on: e.target.checked };
+    applyPlBody();
+    writePlPrefs();
+  });
+  for (const [id, key] of [['bv-pl-on-sp', 'sp'], ['bv-pl-on-rp', 'rp'], ['bv-pl-on-hit', 'h']]) {
+    document.getElementById(id).addEventListener('change', e => {
+      PL_PREFS = { ...PL_PREFS, [key]: e.target.checked };
+      writePlPrefs();
+    });
+  }
+
   async function refreshPl(msg, label, btn) {
     if (btn) btn.disabled = true;
     try {
       const resp = await sendMessage(msg);
       if (resp && resp.ok) {
         const c = resp.counts || {};
-        setStatus(`${label} — ${c.plSp || 0} SP · ${c.plRp || 0} closers ranked.`);
+        setStatus(`${label} — ${c.plSp || 0} SP · ${c.plRp || 0} closers · ${c.plHit || 0} batters ranked.`);
       } else {
         setStatus('Pitcher List refresh failed: ' + ((resp && resp.error) || 'unknown error'));
       }
@@ -185,9 +230,10 @@
     const btn = e.currentTarget;
     const sp = document.getElementById('bv-pl-sp').value.trim();
     const rp = document.getElementById('bv-pl-rp').value.trim();
-    if (!sp && !rp) { setStatus('Paste at least one list, or use Fetch latest ranks to pull from the web.'); return; }
+    const hit = document.getElementById('bv-pl-hit').value.trim();
+    if (!sp && !rp && !hit) { setStatus('Paste at least one list, or use Fetch latest ranks to pull from the web.'); return; }
     setStatus('Saving override…');
-    try { await chrome.storage.local.set({ [plOverrideKey()]: { sp, rp, ts: Date.now() } }); } catch (_) {}
+    try { await chrome.storage.local.set({ [plOverrideKey()]: { sp, rp, hit, ts: Date.now() } }); } catch (_) {}
     // force:false so the SW honors the override we just saved (this week only; auto-fetch resumes after).
     refreshPl({ type: 'REFRESH_PL', force: false }, 'Override saved (this week)', btn);
   });
@@ -196,6 +242,7 @@
     const btn = e.currentTarget;
     document.getElementById('bv-pl-sp').value = '';
     document.getElementById('bv-pl-rp').value = '';
+    document.getElementById('bv-pl-hit').value = '';
     setStatus('Clearing override…');
     try { await chrome.storage.local.remove(plOverrideKey()); } catch (_) {}
     refreshPl({ type: 'REFRESH_PL', force: true }, 'Override cleared, fetched latest', btn);
@@ -207,18 +254,25 @@
   (async () => {
     document.getElementById('bv-ver').textContent = 'v' + chrome.runtime.getManifest().version;
     try {
-      const obj = await chrome.storage.sync.get([BV.STORAGE.prefs, BV.STORAGE.debug, BV.STORAGE.enabled]);
+      const obj = await chrome.storage.sync.get([BV.STORAGE.prefs, BV.STORAGE.plPrefs, BV.STORAGE.debug, BV.STORAGE.enabled]);
       PREFS = mergePrefs(obj[BV.STORAGE.prefs]);
       document.getElementById('bv-debug').checked = obj[BV.STORAGE.debug] === true;
       const on = obj[BV.STORAGE.enabled] !== false;            // default on
       document.getElementById('bv-enabled').checked = on;
       setMasterLabel(on);
+      PL_PREFS = BV.mergePlPrefs(obj[BV.STORAGE.plPrefs]);
+      document.getElementById('bv-pl-on').checked = PL_PREFS.on !== false;
+      document.getElementById('bv-pl-on-sp').checked = PL_PREFS.sp !== false;
+      document.getElementById('bv-pl-on-rp').checked = PL_PREFS.rp !== false;
+      document.getElementById('bv-pl-on-hit').checked = PL_PREFS.h !== false;
+      applyPlBody();
     } catch (_) { /* defaults already set */ }
     try {
       const o = (await chrome.storage.local.get(plOverrideKey()))[plOverrideKey()];
       if (o) {
         document.getElementById('bv-pl-sp').value = o.sp || '';
         document.getElementById('bv-pl-rp').value = o.rp || '';
+        document.getElementById('bv-pl-hit').value = o.hit || '';
       }
     } catch (_) { /* no override saved */ }
     render();

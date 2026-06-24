@@ -7,6 +7,16 @@
 /* Injected metric cells - transparent base so the per-cell shade shows; tabular figures align. */
 .savant-col { background: transparent; font-variant-numeric: tabular-nums; }
 
+/* 'bubble' cell shade (default): a small coloured oval centred just under the value, echoing the Savant
+   slider dot. The number itself is never tinted, so it stays fully legible. Colour/width/opacity come
+   from custom properties set inline by content.js (paintCell). */
+td.savant-bubble { position: relative; }
+td.savant-bubble::after {
+  content: ""; position: absolute; left: 50%; bottom: 2px; transform: translateX(-50%);
+  width: var(--bv-bub-w, 16px); height: 5px; border-radius: 999px;
+  background: var(--bv-bub-c, transparent); opacity: var(--bv-bub-o, 1); pointer-events: none;
+}
+
 /* Used to hide ESPN's Research columns and the condensed (SLG / L) modal columns. */
 .savant-hidden { display: none !important; }
 
@@ -24,6 +34,17 @@
 /* Handedness suffix in the list position cell + the modal team line. */
 .savant-hand { margin-left: 5px; color: #8a94a6; font-weight: 700; }
 
+/* Matchup ratings, both in the OPP cell after the team abbrev (the wrapper is set to inline-flex in JS so
+   they middle-align): batters a ▲▲…▼▼ symbol, pitchers a small opponent-offense rank badge ("MIL 24").
+   The opposing pitcher's hand goes in the STATUS cell's parens ("(Drohan • L)"). */
+.savant-mu { white-space: nowrap; cursor: help; }
+.savant-mu-sym { font-size: 13px; line-height: 1; font-weight: 800; }
+/* OPP-cell rank badge. Sits in an inline-flex wrapper (set in JS) so it middle-aligns with the abbrev. */
+.savant-oprk {
+  padding: 1px 5px; border-radius: 4px; font-size: 11px; font-weight: 800;
+  font-variant-numeric: tabular-nums; cursor: help;
+}
+
 /* Pitcher List rank ("• PL #12"), right after handedness (pitchers only). A hair dimmer than the hand
    so the throwing hand stays the primary read; the source list (SP vs closer) + tier is in the tooltip. */
 .savant-pl { margin-left: 5px; color: #6f7888; font-weight: 700; cursor: help; }
@@ -36,3 +57,21 @@
 .savant-adv { margin-top: 8px; }
 .savant-adv-title { margin: 12px 0 6px; }
 .savant-adv-rowlabel { font-weight: 600; white-space: nowrap; }
+
+/* Savant percentile sliders - collapsible, beneath the Advanced Stats table in the player card. */
+.savant-sliders { margin: 10px 0 4px; }
+.savant-sliders > summary { cursor: pointer; font-weight: 600; font-size: 13px; color: #2a2d33; padding: 3px 0; }
+.savant-sliders > summary:hover { color: #000; }
+.savant-sliders-body { padding: 8px 4px 2px; }
+.savant-sliders-empty { padding: 8px 4px; color: #888; font-size: 12px; }
+/* label | track | value (value column holds the real stat: .350 / 91.2 / 12.3%) */
+.savant-slider-row { display: grid; grid-template-columns: 104px 1fr 48px; align-items: center; gap: 9px; margin: 6px 0; }
+.savant-slider-lab { font-size: 11px; color: #555; text-align: right; white-space: nowrap; }
+.savant-slider-track { position: relative; height: 6px; border-radius: 999px; background: #e6e8ec; }
+/* fill rides at low opacity so the solid dot (the percentile marker) stays the focal point, like Savant. */
+.savant-slider-fill { position: absolute; left: 0; top: 0; height: 100%; border-radius: 999px; opacity: .35; }
+.savant-slider-dot {
+  position: absolute; top: 50%; width: 13px; height: 13px; border-radius: 50%;
+  transform: translate(-50%, -50%); box-shadow: 0 0 0 2px #fff, 0 1px 2px rgba(0, 0, 0, .25);
+}
+.savant-slider-val { font-size: 12px; font-weight: 700; color: #2a2d33; text-align: right; font-variant-numeric: tabular-nums; }
