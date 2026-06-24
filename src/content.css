@@ -1,0 +1,30 @@
+/*
+ * Barrel Vision - content styles (injected on fantasy.espn.com/baseball/*)
+ * Only the overlay-on-ESPN styles live here. The preferences UI is its own page
+ * (popup.css), so the gear/modal styles from the userscript are gone.
+ */
+
+/* Injected metric cells - transparent base so the per-cell shade shows; tabular figures align. */
+.savant-col { background: transparent; font-variant-numeric: tabular-nums; }
+
+/* Used to hide ESPN's Research columns and the condensed (SLG / L) modal columns. */
+.savant-hidden { display: none !important; }
+
+/* Diagnostic HUD (debug readout), bottom-left, clear of ESPN's chat floater. */
+#savant-hud {
+  position: fixed; bottom: 48px; left: 10px; z-index: 99999;
+  font: 12px/1.4 -apple-system, system-ui, sans-serif;
+  padding: 6px 10px; border-radius: 6px;
+  background: #1d1f23; color: #e6e6e6;
+  box-shadow: 0 2px 8px rgba(0, 0, 0, .3); opacity: .92;
+}
+#savant-hud[data-state="err"]  { background: #5b1a1a; }
+#savant-hud[data-state="warn"] { background: #5b4a16; }
+
+/* Handedness suffix in the list position cell + the modal team line. */
+.savant-hand { margin-left: 5px; color: #8a94a6; font-weight: 700; }
+
+/* Advanced Stats table in the player-card modal. */
+.savant-adv { margin-top: 8px; }
+.savant-adv-title { margin: 12px 0 6px; }
+.savant-adv-rowlabel { font-weight: 600; white-space: nowrap; }

@@ -1,0 +1,22 @@
+# Tooling / local agent config
+.claude/
+
+# OS / editor cruft
+.DS_Store
+Thumbs.db
+desktop.ini
+*~
+.idea/
+.vscode/
+
+# Build / packaging output (buildless project: nothing to compile, but keep store zips out)
+*.zip
+dist/
+build/
+
+# Dependencies (none expected — vanilla MV3 — but guard against accidental installs)
+node_modules/
+package-lock.json
+
+# Local scratch / logs
+*.log

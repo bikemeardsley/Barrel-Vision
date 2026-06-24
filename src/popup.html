@@ -1,0 +1,42 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <link rel="stylesheet" href="popup.css">
+  <title>Barrel Vision</title>
+</head>
+<body>
+  <div class="bv-head">
+    <span class="bv-title">Barrel Vision</span>
+    <span class="bv-ver" id="bv-ver"></span>
+  </div>
+
+  <p class="bv-note">
+    Red = better than your threshold, blue = worse, deeper shade = further away.
+    Uncheck a row to turn off shading for that column (the value is kept). Values compare in the units
+    shown in each column (SqUp% in %, xwOBA as .xxx). Changes apply live.
+  </p>
+
+  <table class="bv-table" id="bv-table">
+    <thead>
+      <tr><th>Column</th><th>On</th><th>Threshold</th><th>Direction</th></tr>
+    </thead>
+    <tbody id="bv-tbody"><!-- rows built in popup.js --></tbody>
+  </table>
+
+  <div class="bv-foot">
+    <label class="bv-debug-toggle"><input type="checkbox" id="bv-debug"> Show debug readout</label>
+    <div class="bv-foot-btns">
+      <button type="button" id="bv-reset">Reset to defaults</button>
+      <button type="button" id="bv-refresh">Refresh Savant data</button>
+    </div>
+  </div>
+
+  <div class="bv-status" id="bv-status" role="status" aria-live="polite"></div>
+
+  <!-- No inline scripts/handlers (extension-page CSP forbids them). core.js first, then popup.js. -->
+  <script src="shared/core.js"></script>
+  <script src="popup.js"></script>
+</body>
+</html>
