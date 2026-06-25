@@ -26,9 +26,8 @@ own stats on roster lists and in the player card. No more tab-switching to read 
 ## What it looks like
 
 Savant's advanced columns land next to ESPN's own stats, with the numbers tinted so the read is instant:
-$\color{#D62E2E}{\textsf{red}}$ = better than your threshold, $\color{#245CCC}{\textsf{blue}}$ = worse, and a
-stronger tint means further from it. Each player also picks up handedness, weekly top-list ranks, and a
-day-of matchup rating (▲▲…▼▼).
+🟥 **red** = better than your threshold, 🟦 **blue** = worse, and a stronger tint means further from it.
+Each player also picks up handedness, weekly top-list ranks, and a day-of matchup rating (▲▲…▼▼).
 
 ![Barrel Vision advanced columns on an ESPN batters roster, with red/blue threshold tinting, handedness, and matchup symbols](docs/images/roster.png)
 
@@ -62,9 +61,9 @@ On top of the columns it also:
 
 - Tints ESPN's own **OPS**, **ERA**, and **WHIP** with the same threshold colouring.
 - Adds **batter and pitcher handedness** next to each player ("Milwaukee Brewers • Righty").
-- Adds **day-of matchup ratings** in the opponent column: a ▲▲…▼▼ symbol ($\color{#1A8F4F}{\textsf{green}}$ =
-  good matchup, $\color{#D62E2E}{\textsf{red}}$ = tough) from the batter's platoon edge versus the listed
-  starter, or the park-adjusted opponent offense for pitchers.
+- Adds **day-of matchup ratings** in the opponent column: a ▲▲…▼▼ symbol (🟩 **green** = good matchup,
+  🟥 **red** = tough) from the batter's platoon edge versus the listed starter, or the park-adjusted
+  opponent offense for pitchers.
 - Shows **weekly top-list ranks** beside each player (e.g. "• PL #4"). Starting-pitcher ranks come from your
   choice of **Pitcher List**, **Razzball**, or **RotoBaller**; closer and hitter ranks come from Pitcher List.
 - In the player card, condenses ESPN's columns (**OBP**+**SLG** into **OPS**, **W**+**L** into **QS**,
