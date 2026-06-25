@@ -320,9 +320,12 @@
       eragap: { show: true, enabled: true,  threshold: 0,     dir: 'high', scale: 1.5 },
       // K% / BB% / K-BB% (StatsAPI-derived). K% higher = better (doc target 25%+, the shading line), BB%
       // lower = better (doc: sub-7% is the stable WHIP predictor), K-BB% higher = better (~15%+ good, 20%+ elite).
-      kpct:   { show: true, enabled: true,  threshold: 25,    dir: 'high', scale: 8 },
+      // Scales are tight on purpose so a clearly-good value saturates: at scale 4, a 28% K (+3 over the 25
+      // line) reaches ~3/4 strength and 29%+ is full; K-BB% maxes at ~20% (scale 5). A gentle scale washed
+      // good arms out into the same pale tint as average ones.
+      kpct:   { show: true, enabled: true,  threshold: 25,    dir: 'high', scale: 4 },
       bbpct:  { show: true, enabled: true,  threshold: 7,     dir: 'low',  scale: 3 },
-      kbb:    { show: true, enabled: true,  threshold: 15,    dir: 'high', scale: 8 },
+      kbb:    { show: true, enabled: true,  threshold: 15,    dir: 'high', scale: 5 },
       oxwoba: { show: true, enabled: true,  threshold: 0.310, dir: 'low',  scale: 0.060 },
       // oBrl% / oHH% (contact ALLOWED) default to Show OFF - oxwOBA already captures contact suppression,
       // and hiding these two keeps room for the K%/BB%/K-BB% command columns. Highlight stays on, so a
@@ -408,6 +411,24 @@
   // Deep clone of the default thresholds (so Reset stays clean and saved prefs merge onto a fresh base).
   function defaultPrefs() { return JSON.parse(JSON.stringify(CONFIG.preferences)); }
 
+  // Merge saved prefs onto a fresh copy of the defaults, adopting ONLY the user-editable fields
+  // (threshold / enabled / show). `scale` and `dir` are internal shading tuning the popup never exposes,
+  // so they ALWAYS come from the current defaults - otherwise a default scale/dir change would silently
+  // fail to reach existing users, whose saved prefs (the popup persists the WHOLE object) would pin the
+  // old values. Keys absent from `saved` keep their defaults, so new columns appear for existing users.
+  const USER_PREF_FIELDS = ['threshold', 'enabled', 'show'];
+  function mergePrefs(saved) {
+    const base = defaultPrefs();
+    if (saved && typeof saved === 'object') {
+      for (const k in base) {
+        const s = saved[k];
+        if (!s || typeof s !== 'object') continue;
+        for (const f of USER_PREF_FIELDS) if (f in s) base[k][f] = s[f];
+      }
+    }
+    return base;
+  }
+
   // Default Pitcher List display toggles, merged with any saved subset (so new lists default sensibly).
   function defaultPlPrefs() { return { ...CONFIG.plPrefs }; }
   function mergePlPrefs(saved) { return { ...CONFIG.plPrefs, ...(saved && typeof saved === 'object' ? saved : {}) }; }
@@ -465,7 +486,7 @@
   root.BV = {
     CONFIG, STORAGE,
     num, pct, pctFrac, dec3, dec2, dec1, gap3, gapEra,
-    normName, handWord, cellSignal, cellColor, defaultPrefs,
+    normName, handWord, cellSignal, cellColor, defaultPrefs, mergePrefs,
     defaultPlPrefs, mergePlPrefs, plPick, countIndex,
     spSourceList, validSpSource, spSourceCfg,
     teamWoba, parkWobaMult, parkNeutralizeWoba, PARK_FACTORS, pitchRates,

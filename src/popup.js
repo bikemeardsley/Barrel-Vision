@@ -46,13 +46,9 @@
     return Number.isFinite(n) ? n : null;
   }
 
-  function mergePrefs(saved) {
-    const base = BV.defaultPrefs();
-    if (saved && typeof saved === 'object') {
-      for (const k in base) if (saved[k]) base[k] = { ...base[k], ...saved[k] };
-    }
-    return base;
-  }
+  // Adopt only the user-editable fields (threshold/enabled/show) from saved prefs; scale/dir always track
+  // the current defaults. Centralised in core so the popup + content script stay in lockstep (see BV.mergePrefs).
+  const mergePrefs = BV.mergePrefs;
 
   // ---------------------------------------------------------------------------
   // Render

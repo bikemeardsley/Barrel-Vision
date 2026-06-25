@@ -433,6 +433,26 @@ insufficient.
 
 ## 15. Changelog
 
+- **v0.17.1 (pitcher matchup as batter-style symbols · shading-tuning fixes)** —
+  - **Pitcher matchup now uses the same ▲▲…▼▼ symbols as the batters** (park-adjusted), replacing the
+    coloured 1–30 opponent-rank badge. The badge had shown the *season* talent rank as a number but coloured
+    it by the *park-adjusted* z-score, so the two diverged (a rank-28 weak offense at a hitter park read
+    yellow, not green — confusing). The symbol carries the park-adjusted read directly, so there's nothing
+    for a number to fight; the precise season rank + the park breakdown move to the hover tooltip. Both sides
+    now share one symbol renderer (`renderPitcherMatchup` → `matchupSymbol`/`matchupTier`); the number badge,
+    its 6-colour palette, and the `.savant-oprk` CSS are removed.
+  - **Matchup colour clamp tightened ±2 → ±1.5 SD** (`pitcherZG`). Real team-offense z's run ~−2…+2.5 but
+    the middle ~24 teams sit within ±1.4, so the ±2 clamp left clearly-weak offenses a tier short of the top
+    symbol; ±1.5 spends the scale on the z's that actually occur (a neutral-park rank-28 now reads ▲▲).
+  - **K% / K-BB% shading scales tightened** (8→4 / 8→5). A clearly-good value (e.g. 28% K, +3 over the 25
+    line) was washing out to the same pale tint as an average one; the steeper scale makes good values
+    saturate vividly while average ones stay faint. (BB% kept at 3 — already saturating well.)
+  - **Prefs-merge centralised + corrected** (`BV.mergePrefs`). Saved prefs now contribute ONLY the
+    user-editable fields (threshold / highlight / show); `scale` and `dir` always come from the current
+    defaults. The popup persists the whole pref object, so previously a default scale/dir change could never
+    reach a returning user — now shading-tuning fixes (like the K% scales above) land without a Reset. The
+    content script + popup both delegate to the one core helper; locked by a new unit test (37 total).
+  - Version **0.17.0 → 0.17.1**. No new permissions, no data-layer change (content-script + shared-core only).
 - **v0.17.0 (pitcher K%/BB%/K-BB% · rank source-health line · unit tests)** —
   - **Pitcher K% / BB% / K-BB% columns** (the doc's #2 K-rate and #5 BB-rate SP priorities, neither a
     Savant field). Self-computed from the **StatsAPI season pitching line** (`BV.pitchRates`: `K% = SO/TBF`,

@@ -622,26 +622,30 @@
   const clamp01 = x => Math.max(0, Math.min(1, x));
   const clamp = (x, lo, hi) => Math.max(lo, Math.min(hi, x));
 
-  // Matchup colour, green → gold → red (g: 0 = worst, red .. 1 = best, green). Red is the app red
-  // (#d62e2e) so it sits with the rest of the page; gold + green are strong enough to read on white.
+  // Matchup palette base hues (app red so it sits with the rest of the page; gold + green read on white).
   const MU_RED = [214, 46, 46], MU_GOLD = [216, 160, 16], MU_GREEN = [26, 143, 79];
-  function matchupColorFromG(g) {
+
+  // 6-tier matchup scale, SHARED by the batter symbols and the pitcher colour so both bucket identically.
+  // Tier 0 = best (weak opponent = good matchup / high g), 5 = worst. Thresholds are sixths of g (0..1).
+  function matchupTier(g) {
     g = clamp01(g);
-    const mix = (a, b, t) => `rgb(${a.map((v, i) => Math.round(v + (b[i] - v) * t)).join(',')})`;
-    return g < 0.5 ? mix(MU_RED, MU_GOLD, g / 0.5) : mix(MU_GOLD, MU_GREEN, (g - 0.5) / 0.5);
+    return g >= 0.833 ? 0 : g >= 0.667 ? 1 : g >= 0.5 ? 2 : g >= 0.333 ? 3 : g >= 0.167 ? 4 : 5;
   }
-  // Batter matchup as a 6-tier symbol over g (sixths), grouped by colour: green (good), gold (mid), red
-  // (bad). ▲▲ elite · ▲ good · ⟋ lean-good · ⟍ lean-tough · ▼ tough · ▼▼ very tough.
-  function matchupSymbol(g) {
-    g = clamp01(g);
-    const green = `rgb(${MU_GREEN})`, gold = `rgb(${MU_GOLD})`, red = `rgb(${MU_RED})`;
-    if (g >= 0.833) return { sym: '▲▲', color: green, label: 'elite' };
-    if (g >= 0.667) return { sym: '▲',  color: green, label: 'good' };
-    if (g >= 0.5)   return { sym: '⟋',  color: gold,  label: 'lean good' };
-    if (g >= 0.333) return { sym: '⟍',  color: gold,  label: 'lean tough' };
-    if (g >= 0.167) return { sym: '▼',  color: red,   label: 'tough' };
-    return { sym: '▼▼', color: red, label: 'very tough' };
-  }
+
+  // Batter matchup as a 6-tier SYMBOL (grouped into the 3 base colours): ▲▲ elite · ▲ good · ⟋ lean-good ·
+  // ⟍ lean-tough · ▼ tough · ▼▼ very tough. (Pitchers use the 6-tier COLOUR below instead of a symbol.)
+  const MU_SYMS = [
+    { sym: '▲▲', color: `rgb(${MU_GREEN})`, label: 'elite' },
+    { sym: '▲',  color: `rgb(${MU_GREEN})`, label: 'good' },
+    { sym: '⟋',  color: `rgb(${MU_GOLD})`,  label: 'lean good' },
+    { sym: '⟍',  color: `rgb(${MU_GOLD})`,  label: 'lean tough' },
+    { sym: '▼',  color: `rgb(${MU_RED})`,   label: 'tough' },
+    { sym: '▼▼', color: `rgb(${MU_RED})`,   label: 'very tough' },
+  ];
+  function matchupSymbol(g) { return MU_SYMS[matchupTier(g)]; }
+
+  // Pitchers reuse the batter symbols (matchupSymbol) - see renderPitcherMatchup - so both sides speak the
+  // same ▲▲…▼▼ language. The symbol carries the park-adjusted read, so there's no 1-30 number to fight it.
 
   // --- Batter matchup model (odds-ratio / log5) -------------------------------------------------------
   // Per the research: combine the batter's expected wOBA-vs-today's-hand with the opposing starter's
@@ -687,9 +691,12 @@
 
   // Pitcher goodness 0..1 from the opponent-offense z-score (continuous, NOT the ordinal rank - this is
   // what kills the "bunched middle" colour distortion). z = +ve means a strong offense (tough = red = low
-  // g); z = -ve means a weak offense (easy = green = high g). Clamped to ±2 SD per the methodology review.
+  // g); z = -ve means a weak offense (easy = green = high g). Clamped to ±1.5 SD: real team-offense z's run
+  // ~-2..+2.5 but the middle ~24 teams sit within ±1.4, so a ±2 clamp left a clearly-weak offense (rank ~28,
+  // z~-1.25) stuck at a washed-out olive (g~0.8) instead of vivid green. ±1.5 spends the green→red range on
+  // the z's that actually occur, so a good matchup reads boldly green and a tough one boldly red.
   function pitcherZG(z) {
-    const C = 2;
+    const C = 1.5;
     return clamp01((C - clamp(z, -C, C)) / (2 * C));
   }
 
@@ -797,15 +804,16 @@
       if (!off || !meta || !(meta.sd > 0)) return;
       // Fold in TODAY's park: the game is at the HOME team's park (the rostered pitcher's own park when
       // home, the opponent's when away - read off ESPN's "@" prefix). Multiply the opponent's park-neutral
-      // wOBA by the day's park multiplier, then re-z against the league to drive the colour. The 1-30 LABEL
-      // stays the season talent rank (OPRK convention); only the colour reflects the park.
+      // wOBA by the day's park multiplier, then re-z against the league -> the PARK-ADJUSTED matchup quality
+      // that picks the ▲▲…▼▼ symbol (so a weak offense at a hitter park reads tougher than its season rank).
+      // The precise season rank + the park breakdown live in the hover tooltip (oppRankTitle).
       const pitTeamId = (indexes.hand[want] || {}).team;
       const homeTeamId = isRowAway(tr) ? oppTeamId : pitTeamId;
       const homeOff = homeTeamId && indexes.teamOff[homeTeamId];
       const todayPf = homeOff ? homeOff.pf : 100;
       const adjWoba = off.nwoba * BV.parkWobaMult(todayPf);
       const adjZ = (adjWoba - meta.mean) / meta.sd;
-      renderOppRank(tr, off.rank, pitcherZG(adjZ), oppRankTitle(off, meta, todayPf, adjZ));
+      renderPitcherMatchup(tr, pitcherZG(adjZ), oppRankTitle(off, meta, todayPf, adjZ));
     }
   }
 
@@ -850,16 +858,18 @@
     return span;
   }
 
-  // Pitcher opponent-offense rank, as a small badge in the OPP cell right after the team abbrev ("MIL 24").
-  function renderOppRank(tr, rank, g, title) {
+  // Pitcher matchup as the SAME 6-tier symbol the batters use (▲▲ … ▼▼), right after the team abbrev
+  // ("MIL ▲▲"). The symbol reflects the PARK-ADJUSTED opponent-offense quality (weak/soft = green ▲▲ …
+  // strong / at a hitter park = red ▼▼), so the day's park is baked into the read rather than fighting a
+  // raw 1-30 number. Same class + colours as the batter symbol, so the two sides look identical.
+  function renderPitcherMatchup(tr, g, title) {
     const host = oppHost(tr);
     if (!host) return;
-    const color = matchupColorFromG(g);
+    const s = matchupSymbol(g);
     const span = document.createElement('span');
-    span.className = 'savant-mu savant-oprk';
-    span.textContent = String(rank);
-    span.style.color = color;
-    span.style.background = color.replace('rgb(', 'rgba(').replace(')', ',0.18)');
+    span.className = 'savant-mu savant-mu-sym';
+    span.textContent = s.sym;
+    span.style.color = s.color;
     span.title = title;
     host.appendChild(span);
   }
@@ -932,15 +942,11 @@
   }
 
   // ---------------------------------------------------------------------------
-  // Prefs (chrome.storage.sync) - merged onto defaults so new columns appear for existing users.
+  // Prefs (chrome.storage.sync) - merged onto defaults so new columns appear for existing users. Adopts
+  // only the user-editable fields (threshold/enabled/show); scale/dir track the current defaults, so a
+  // default shading-tuning change reaches existing users without a Reset (see BV.mergePrefs).
   // ---------------------------------------------------------------------------
-  function mergePrefs(saved) {
-    const base = BV.defaultPrefs();
-    if (saved && typeof saved === 'object') {
-      for (const k in base) if (saved[k]) base[k] = { ...base[k], ...saved[k] };
-    }
-    return base;
-  }
+  const mergePrefs = BV.mergePrefs;
 
   async function loadState() {
     try {

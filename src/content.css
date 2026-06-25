@@ -34,16 +34,12 @@ td.savant-bubble::after {
 /* Handedness suffix in the list position cell + the modal team line. */
 .savant-hand { margin-left: 5px; color: #8a94a6; font-weight: 700; }
 
-/* Matchup ratings, both in the OPP cell after the team abbrev (the wrapper is set to inline-flex in JS so
-   they middle-align): batters a ▲▲…▼▼ symbol, pitchers a small opponent-offense rank badge ("MIL 24").
-   The opposing pitcher's hand goes in the STATUS cell's parens ("(Drohan • L)"). */
+/* Matchup ratings, in the OPP cell after the team abbrev (the wrapper is set to inline-flex in JS so they
+   middle-align): BOTH batters and pitchers use a ▲▲…▼▼ symbol (batters vs the opposing starter's hand,
+   pitchers the park-adjusted opponent offense). The opposing pitcher's hand goes in the STATUS cell's
+   parens ("(Drohan • L)"). */
 .savant-mu { white-space: nowrap; cursor: help; }
 .savant-mu-sym { font-size: 13px; line-height: 1; font-weight: 800; }
-/* OPP-cell rank badge. Sits in an inline-flex wrapper (set in JS) so it middle-aligns with the abbrev. */
-.savant-oprk {
-  padding: 1px 5px; border-radius: 4px; font-size: 11px; font-weight: 800;
-  font-variant-numeric: tabular-nums; cursor: help;
-}
 
 /* Pitcher List rank ("• PL #12"), right after handedness (pitchers only). A hair dimmer than the hand
    so the throwing hand stays the primary read; the source list (SP vs closer) + tier is in the tooltip. */

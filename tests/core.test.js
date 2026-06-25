@@ -191,3 +191,27 @@ test('pitchRates - K% / BB% from the StatsAPI season line', async (t) => {
     assert.equal(kbb.fmt(kbb.derive({ kPct: 28.5, bbPct: 6.5 })), '22.0%');
   });
 });
+
+// ---------------------------------------------------------------------------
+test('mergePrefs - adopts user fields (threshold/enabled/show); scale & dir always from defaults', async (t) => {
+  await t.test('a saved scale/dir is IGNORED so default shading-tuning reaches existing users', () => {
+    // The popup persists the whole pref object, so a returning user could carry a stale scale; the merge
+    // must drop it (this is what makes a default scale change - e.g. the K% vividness fix - actually land).
+    const merged = BV.mergePrefs({ kpct: { scale: 999, dir: 'low', threshold: 30, enabled: false, show: false } });
+    const def = BV.defaultPrefs().kpct;
+    assert.equal(merged.kpct.scale, def.scale);   // default scale, NOT 999
+    assert.equal(merged.kpct.dir, def.dir);       // default dir, NOT 'low'
+    assert.equal(merged.kpct.threshold, 30);      // user threshold adopted
+    assert.equal(merged.kpct.enabled, false);     // user highlight adopted
+    assert.equal(merged.kpct.show, false);        // user show adopted
+  });
+  await t.test('keys absent from saved keep their defaults (new columns appear for existing users)', () => {
+    const merged = BV.mergePrefs({ barrel: { threshold: 10 } });
+    assert.deepEqual(merged.kpct, BV.defaultPrefs().kpct);   // untouched
+    assert.equal(merged.barrel.threshold, 10);
+  });
+  await t.test('nullish / non-object saved is safe and returns clean defaults', () => {
+    assert.deepEqual(BV.mergePrefs(null), BV.defaultPrefs());
+    assert.deepEqual(BV.mergePrefs({ barrel: null }), BV.defaultPrefs());
+  });
+});

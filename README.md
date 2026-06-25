@@ -197,6 +197,9 @@ scripts/     package.ps1 — zips src/ for store upload
 
 ## Status
 
+`v0.17.1` — pitcher matchup ratings now use the **same ▲▲…▼▼ symbols as batters** (park-adjusted; the
+opponent rank + park move to the tooltip), plus shading-tuning fixes — tighter K% / K−BB% and matchup
+colour scales, and a prefs-merge fix so default tuning reaches existing users without a Reset. Built on
 `v0.17.0` — added **pitcher K% / BB% / K−BB% columns** (the strikeout/walk skills Savant doesn't publish,
 self-computed from the MLB StatsAPI season pitching line and joined by MLBAM id — one bulk call, no new
 permission), a **rank source-health line** in the popup (rows parsed + freshness per list, so a gracefully
