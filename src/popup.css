@@ -39,6 +39,8 @@ body {
 .bv-table th { font-size: 11px; text-transform: uppercase; letter-spacing: .4px; color: #888; }
 
 .bv-m-lab { font-weight: 600; }
+/* Stat rows with an explanation: hover the name to see it (tooltip = the title attr); cursor cues it. */
+.bv-m-lab[title] { cursor: help; }
 .bv-m-dir { color: #888; font-size: 11px; }
 .bv-m-onc { width: 1%; white-space: nowrap; text-align: center; }
 .bv-m-th { width: 86px; padding: 3px 6px; font: inherit; }
@@ -100,6 +102,15 @@ input[type="checkbox"] { width: 15px; height: 15px; cursor: pointer; accent-colo
 /* Per-list toggles (Starting pitchers / Closers / Hitters). */
 .bv-pl-lists { display: flex; flex-wrap: wrap; gap: 8px 16px; margin: 10px 0 4px; }
 .bv-pl-list { display: flex; align-items: center; gap: 6px; font-size: 12px; color: #444; cursor: pointer; }
+/* Source-health line: per-list rows parsed + freshness. Muted by default; amber when a list failed
+   to parse (ok=false), so a graceful skip is visible rather than silent. Empty until the first fetch. */
+.bv-pl-health { margin: 6px 0 2px; font-size: 11px; line-height: 1.4; color: #777; }
+.bv-pl-health:empty { display: none; }
+.bv-pl-health b { color: #555; font-weight: 600; }
+.bv-pl-health .bv-pl-health-when { color: #999; }
+.bv-pl-health.bv-pl-health-warn { color: #b26a00; }
+.bv-pl-health.bv-pl-health-warn b { color: #b26a00; }
+
 .bv-pl-note { margin: 8px 0; color: #666; font-size: 11px; line-height: 1.4; }
 .bv-pl-note code { background: #f0f0f0; padding: 1px 4px; border-radius: 3px; }
 .bv-pl-lab { display: block; margin: 8px 0 3px; font-size: 11px; font-weight: 600; color: #555; }

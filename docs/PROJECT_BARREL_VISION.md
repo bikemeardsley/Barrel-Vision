@@ -208,6 +208,7 @@ text). Headers below are the *actual* headers (re-verified live 2026, `min=10`).
 | Exit Velocity (pitcher) | `…/leaderboard/statcast?type=pitcher&…&min={MIN}&csv=true` | same as batter EV, now contact **allowed** |
 | Expected Statistics (pitcher) | `…/leaderboard/expected_statistics?type=pitcher&…&min={MIN}&csv=true` | batter columns **plus** `era`, `xera`, `era_minus_xera_diff` |
 | Handedness | `statsapi.mlb.com/api/v1/sports/1/players?season={Y}` (JSON) | `fullName`, `batSide.code`, `pitchHand.code` (L/R/S), `primaryPosition`, `nameSlug` |
+| Pitcher K% / BB% | `statsapi.mlb.com/api/v1/stats?stats=season&group=pitching&season={Y}&sportId=1&playerPool=all&limit=2000` (JSON) | per split: `player.id` (= MLBAM id, joins to Savant `player_id`), `stat.strikeOuts`/`baseOnBalls`/`battersFaced` → `K% = SO/TBF`, `BB% = BB/TBF` (`BV.pitchRates`) |
 | Starters (SP) ranks — **selectable source** | weekly **article**, latest URL via category **RSS**: PL `…/the-list/feed/`, Razzball `…/top-100-starting-pitchers/feed/`, RotoBaller `…/mlb-rankings/feed` | PL: `<table class="list">` (`td.rank`/`td.name>a` `…/player/{slug}/`/`td.team`/`span.tier`). Razzball: **largest** plain `<table>` (rank·name·team; names unlinked → badge links to the week's article). RotoBaller: table with **most** `a.rbPlayer` links (rank·tier·name → `/mlb/player/{id}/{name}`) |
 | Closers + hitters ranks (always Pitcher List) | weekly **article** via category **RSS** (`…/reliever-ranks/feed/`, `…/hitter-list/feed/`) | first `<table class="list">`: `td.rank`, `td.name>a`, `td.team`, `span.tier` |
 
@@ -244,8 +245,9 @@ Barrel Hunting value lives. (Bat-tracking has its own swing-count qualification 
 ## 6. Columns
 
 - **Hitters (`bat`):** Brl%, HH%, xwOBA, Gap (derived), avgEV, BatSpd, SqUp%.
-- **Pitchers (`pit`):** xERA, ERAgap (derived), oxwOBA, oBrl%, oHH% (the `o`-prefixed = contact
-  allowed, lower is better).
+- **Pitchers (`pit`):** xERA, ERAgap (derived), **K%, BB%, K-BB% (derived)**, oxwOBA, oBrl%, oHH% (the
+  `o`-prefixed = contact allowed, lower is better). K%/BB% are joined from the StatsAPI season pitching
+  line by MLBAM id (not a Savant field); K-BB% is derived `K% − BB%`.
 - **ESPN stats shaded in place** (not Savant columns): OPS (hitters), ERA + WHIP (pitchers), via
   `shadeListColumn()` on lists and the condensed modal cells.
 
@@ -306,14 +308,22 @@ modal is still decorated exactly once).
 3. Open `fantasy.espn.com/baseball/...` (your team/roster). Columns should appear in the scrolling
    stats panel where ESPN's Research columns were.
 
+**Automated tests (dev-only).** The pure shared helpers in `src/shared/core.js` have a dependency-free
+unit suite: `npm test` (→ `node --test tests/`). It locks the sign quirks (the derived Gap / ERA gap),
+`teamWoba`, the park-neutral math, `cellSignal`, `normName`, and `pitchRates`. `package.json` is dev-only
+and is **not** shipped in the store zip (`scripts/package.ps1` zips `src/` only).
+
 **Verify checklist (the in-browser unknowns):**
 - Columns land cleanly in the scroller with the "Advanced" banner roughly aligned; data columns align
   cell-for-cell even if the banner is a touch off (cosmetic).
 - Sort / filter / paginate a roster: metrics follow the right player (no stale rows), TOTALS/empty
   rows stay untouched.
 - Open a player card: handedness line, condensed OPS (or QS), Advanced Stats table + Savant Page link.
+- Pitcher columns include **K% / BB% / K-BB%** (StatsAPI-joined; blank for a pitcher with no season TBF).
 - Toolbar popup: toggle a column / change a threshold → the table re-shades live (reopen the tab if the
   popup is covering it). "Refresh Savant data" reports updated counts.
+- Toolbar popup, Top-list ranks: the **source-health line** under the per-list toggles shows rows parsed +
+  freshness (e.g. "Starters (RZ) 100 · Closers 50 · Batters 150 — fetched …"); a failed parse shows ⚠ amber.
 - Enable the debug readout: bottom-left badge shows `Savant: N hitters · M pitchers · matched X/Y rows`
   and `MLB API: N handedness found`.
 - Service worker logs (`chrome://extensions` → Inspect views: service worker): no errors; any skipped
@@ -330,8 +340,14 @@ modal is still decorated exactly once).
 - **Phase 3 — MV3 browser extension.** ✅ Done (v0.9.0). Same data layer, packaged; settings in the
   toolbar popup; minimal permissions. The resume/portfolio artifact.
 - **Phase 4 — Pitchers + handedness.** ✅ Done (shipped in the userscript, carried into MV3). Savant
-  has no Stuff+/PLV/xFIP/K-BB% (those are Pitcher List / FanGraphs), so the overlay surfaces the
-  useful Savant-only subset.
+  has no Stuff+/PLV/xFIP (those are Pitcher List / FanGraphs); the overlay surfaces the useful Savant-only
+  subset plus **K%/BB%/K-BB%** self-computed from the StatsAPI season line (v0.17.0).
+- **Phase 5 — Cross-browser publish.** Pending. Ship to the **Chrome** + **Edge** stores (both Chromium,
+  same package) and add a **Firefox** port. Firefox is MV3 too but differs on the background context
+  (Firefox prefers an event-page / `scripts` background and historically `browser.*` promises over
+  `chrome.*` callbacks) and on `host_permissions` prompting — so the port is a manifest + a thin
+  `browser`/`chrome` shim, not a rewrite. Tracked here so the store-submission work (icons, listing,
+  privacy copy in `docs/PUBLISHING.md`) covers all three at once.
 
 ---
 
@@ -399,7 +415,8 @@ insufficient.
 | xwOBA allowed | `est_woba` | ✅ oxwOBA | contact suppression |
 | Barrel% allowed | `brl_percent` | ✅ oBrl% | contact suppression |
 | Hard-Hit% allowed | `ev95percent` | ✅ oHH% | contact suppression |
-| Stuff+ / PLV / xFIP / K-BB% | — | ✖ the underlying metrics aren't free; but PL's *composite rank* (below) is | #1/#2 SP priorities |
+| K% / BB% / K-BB% | StatsAPI `strikeOuts`/`baseOnBalls`/`battersFaced` (`BV.pitchRates`) | ✅ columns (K-BB% derived; joined by MLBAM id — not a Savant field) | #2 (K rate) / #5 (BB rate) |
+| Stuff+ / PLV / xFIP | — | ✖ the underlying metrics aren't free; but PL's *composite rank* (below) is | #1/#2 SP priorities |
 | Pitcher List rank (SP + closer) | PL weekly article `td.rank` | ✅ inline "• PL #N" after handedness (SP "The List" / "Top 50 Closers") | analyst composite |
 | Throwing hand | StatsAPI `pitchHand.code` | ✅ (StatsAPI, not Savant) | matchup context |
 
@@ -416,6 +433,50 @@ insufficient.
 
 ## 15. Changelog
 
+- **v0.17.0 (pitcher K%/BB%/K-BB% · rank source-health line · unit tests)** —
+  - **Pitcher K% / BB% / K-BB% columns** (the doc's #2 K-rate and #5 BB-rate SP priorities, neither a
+    Savant field). Self-computed from the **StatsAPI season pitching line** (`BV.pitchRates`: `K% = SO/TBF`,
+    `BB% = BB/TBF` on batters-faced, the FanGraphs definition) and joined onto the pitcher index by **MLBAM
+    id** (Savant `player_id` == StatsAPI `person.id`) — **one bulk call** (`CONFIG.mlbPitching`, ~700 rows),
+    no per-pitcher fetch, no new host (statsapi was already permitted), best-effort (a failure leaves the
+    three columns blank). `K-BB%` is **derived** in the column (`kPct − bbPct`) like the Gap columns. New
+    columns sit after `ERAgap`; defaults — K% (≥23, higher better), BB% (≤7, lower better), K-BB% (≥15,
+    higher better) — all Show + Highlight on; the popup's Show/Highlight/threshold rows appear automatically
+    (they're driven off `CONFIG.columns.pit`). Index cache **v6 → v7** (pitcher records now carry
+    `kPct`/`bbPct`). Verified live 2026: 708 pitchers, Misiorowski 39.1% K / 6.5% BB.
+  - **Rank source-health line in the popup.** The PL/Razzball/RotoBaller scrapers already **gracefully
+    skip** on a short/changed parse (render no rank rather than wrong ranks) — but silently. `getPL` now
+    writes a small **health blob** (`STORAGE.plHealth`: per-list rows parsed + `ok` + source + the resolved
+    article URL, plus `mode` fetched/cached/override + `fetchedAt`) on **every** resolution path; the popup
+    renders it under the per-list toggles as e.g. *“Starters (RZ) 100 · Closers 50 · Batters 150 — fetched
+    2h ago.”* A list that failed to parse shows **⚠** and tints the line **amber**, so a skipped week is
+    visible. No new message round-trip (the popup reads the local key directly, refreshing it after each
+    fetch/override/clear/source-switch).
+  - **Unit tests for the pure shared helpers** (`tests/core.test.js`, Node's built-in `node:test`, **zero
+    runtime deps** — `npm test` → `node --test`). 33 cases lock the counterintuitive bits the doc warns must
+    never get “corrected”: the **Gap sign** (`est_woba − woba` stays positive for an underperformer; the
+    published column is the opposite sign), the **ERA gap** (`era − xera`), **`teamWoba`** (uBB = BB − IBB,
+    SF+HBP in the denominator, correctly-ordered linear weights), **`parkNeutralizeWoba`/`parkWobaMult`**,
+    **`cellSignal`** (threshold/scale/dir + clamping), **`normName`** (accents, suffixes, the `iv`-inside-
+    *Ivan* word-boundary case), and **`pitchRates`**. `package.json` is **dev-only** — not part of the
+    packaged extension (`scripts/package.ps1` zips `src/` only), and `.gitignore` already keeps
+    `node_modules` out (there are none).
+  - **Per-stat tooltips in the preferences popup.** Every row — batter + pitcher columns, ESPN's own
+    OPS/ERA/WHIP, and the Handedness rows — carries a one-line explanation on the **stat name** (hover it;
+    the text is the cell's `title=`, HTML-escaped via `escAttr` against the innerHTML row build, with a
+    `cursor: help` cue). Copy is grounded in the framework doc (barrel 8/12, HH 40/45, K 25%+, BB sub-7%) and names the
+    sign quirks explicitly (Gap = xwOBA−wOBA positive = buy-low; ERAgap = ERA−xERA positive = unlucky). The
+    `DESCRIPTIONS` map is **popup-only** UI copy (it doesn't belong in the 2+-context `core.js`). *Vetted by
+    an adversarial fact-check pass against the doc + Savant semantics; squared-up% reworded off "barrel
+    accuracy" (it's EV efficiency, launch-angle-independent), opp-xwOBA aligned with the batter-xwOBA
+    wording, and K%'s shading threshold moved 23 → **25** so the named "25%+ target" matches the threshold.*
+  - **oBrl% / oHH% now default to Show OFF.** oxwOBA already captures contact-suppression, so the two
+    redundant contact-allowed columns are hidden by default to make room for the new K%/BB%/K-BB% command
+    columns (Highlight stays on, so re-showing them still shades). Existing saved prefs override the default
+    (the per-key merge in `mergePrefs`), so current users keep them until they Reset to defaults or toggle
+    Show off; new installs get the leaner pitcher set.
+  - Version **0.16.0 → 0.17.0**. No new permissions; the only data-layer change is the bulk StatsAPI
+    pitching call (same already-permitted host).
 - **v0.16.0 (two-way player card follows the Batting/Pitching toggle)** —
   - **Player-card modal now re-decorates when a two-way player's Batting/Pitching toggle flips.** The card
     for a two-way player (Ohtani) has a Batting/Pitching toggle that swaps the stats table in place,

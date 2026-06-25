@@ -74,6 +74,10 @@
         <label class="bv-pl-list"><span class="bv-switch"><input type="checkbox" id="bv-pl-on-hit" checked><span class="bv-slider"></span></span> Batters</label>
       </div>
 
+      <!-- Source health: per-list rows parsed + when last updated. A short/failed parse shows ⚠ here
+           instead of silently rendering no ranks. Filled from chrome.storage.local by popup.js. -->
+      <div class="bv-pl-health" id="bv-pl-health"></div>
+
       <p class="bv-pl-note">
         Starters come from the source above; closers and batters are always Pitcher List. Ranks are
         fetched automatically each week — <b>Fetch latest ranks</b> pulls them now (e.g. right after a new

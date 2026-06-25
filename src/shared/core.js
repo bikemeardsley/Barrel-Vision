@@ -88,6 +88,24 @@
   }
 
   // ---------------------------------------------------------------------------
+  // Pitcher command/strikeout rates (K% / BB% / K-BB%) - the doc's #2 (K rate) and
+  // #5 (BB rate) SP priorities, neither of which is a Savant field. Self-computed
+  // from the StatsAPI SEASON pitching line (the same API family we already use for QS
+  // + team wOBA, so no new source): K% = SO/TBF, BB% = BB/TBF, on batters-faced (the
+  // pitcher's PA), matching the FanGraphs definition. Returns null if TBF is missing
+  // (a rate on no batters is meaningless), so the columns stay blank rather than 0%.
+  // Values are returned already percent-scaled (e.g. 28.5), so the pct formatter shows
+  // them directly and thresholds compare in percent units. K-BB% is DERIVED in the
+  // column (kPct - bbPct) for the same reason the gap columns are: one obvious formula,
+  // computed in one place.
+  function pitchRates(stat) {
+    if (!stat) return null;
+    const so = num(stat.strikeOuts), bb = num(stat.baseOnBalls), tbf = num(stat.battersFaced);
+    if (!(tbf > 0)) return null;
+    return { kPct: 100 * so / tbf, bbPct: 100 * bb / tbf };
+  }
+
+  // ---------------------------------------------------------------------------
   // Name normalization - the join key between ESPN DOM names and Savant feeds.
   // Strips accents / punctuation / suffixes. Used in BOTH the SW (to key the
   // index) and the content script (to normalize DOM names before lookup), so it
@@ -171,6 +189,12 @@
     // independent of ESPN's list-filter window (the old roster-list scrape got this wrong when the
     // list was filtered to Last 7/15/30/Projected).
     mlbStatsGameLog: (id, year) => `https://statsapi.mlb.com/api/v1/people/${id}/stats?stats=gameLog&group=pitching&season=${year}&gameType=R`,
+
+    // Bulk SEASON pitching line for EVERY pitcher (one call, ~700 rows), used to derive K% / BB% / K-BB%
+    // (BV.pitchRates) and join them onto the pitcher index by MLBAM id (player_id == person.id). Same
+    // statsapi host already permitted - no new source. `playerPool=all` + a high limit returns the whole
+    // pool (incl. relievers); each split carries player.id and stat.{strikeOuts,baseOnBalls,battersFaced}.
+    mlbPitching: (year) => `https://statsapi.mlb.com/api/v1/stats?stats=season&group=pitching&season=${year}&sportId=1&playerPool=all&limit=2000&gameType=R`,
 
     // Closers + hitters ALWAYS come from Pitcher List (the selectable SP sources below publish STARTERS
     // only): reliever "Top 50 Closers" and the "Top 150 Hitters" list. Weekly ARTICLES (no API), each a
@@ -257,6 +281,12 @@
         // ERA gap = ERA - xERA (positive = unlucky, ERA worse than skill = improvement coming = buy).
         // era_minus_xera_diff is correctly signed here, but we derive to stay robust and explicit.
         { key: 'eragap', label: 'ERAgap', derive: r => num(r.era) - num(r.xera),                    fmt: gapEra },
+        // K% / BB% / K-BB% from the StatsAPI season line (BV.pitchRates joins kPct/bbPct onto the index
+        // by player_id - NOT a Savant field). K rate is the doc's #2 SP priority, BB rate #5; K-BB% is the
+        // single most stable command signal, so it's the highlighted default. K-BB% is DERIVED (kPct-bbPct).
+        { key: 'kpct',   label: 'K%',     sourceCandidates: ['kPct'],                                fmt: pct },
+        { key: 'bbpct',  label: 'BB%',    sourceCandidates: ['bbPct'],                               fmt: pct },
+        { key: 'kbb',    label: 'K-BB%',  derive: r => num(r.kPct) - num(r.bbPct),                   fmt: pct },
         { key: 'oxwoba', label: 'oxwOBA', sourceCandidates: ['est_woba'],                            fmt: dec3 },
         { key: 'obrl',   label: 'oBrl%',  sourceCandidates: ['brl_percent', 'barrel_batted_rate'],  fmt: pct },
         { key: 'ohh',    label: 'oHH%',   sourceCandidates: ['ev95percent', 'hard_hit_percent'],    fmt: pct },
@@ -288,9 +318,18 @@
       // ERA worse than xERA (unlucky -> improvement coming), so higher is the "good" side.
       xera:   { show: true, enabled: false, threshold: 4.00,  dir: 'low',  scale: 1.5 },
       eragap: { show: true, enabled: true,  threshold: 0,     dir: 'high', scale: 1.5 },
+      // K% / BB% / K-BB% (StatsAPI-derived). K% higher = better (doc target 25%+, the shading line), BB%
+      // lower = better (doc: sub-7% is the stable WHIP predictor), K-BB% higher = better (~15%+ good, 20%+ elite).
+      kpct:   { show: true, enabled: true,  threshold: 25,    dir: 'high', scale: 8 },
+      bbpct:  { show: true, enabled: true,  threshold: 7,     dir: 'low',  scale: 3 },
+      kbb:    { show: true, enabled: true,  threshold: 15,    dir: 'high', scale: 8 },
       oxwoba: { show: true, enabled: true,  threshold: 0.310, dir: 'low',  scale: 0.060 },
-      obrl:   { show: true, enabled: true,  threshold: 8,     dir: 'low',  scale: 6 },
-      ohh:    { show: true, enabled: true,  threshold: 40,    dir: 'low',  scale: 12 },
+      // oBrl% / oHH% (contact ALLOWED) default to Show OFF - oxwOBA already captures contact suppression,
+      // and hiding these two keeps room for the K%/BB%/K-BB% command columns. Highlight stays on, so a
+      // user who turns Show back on still gets the shading. (Existing saved prefs override this default;
+      // Reset to defaults, or toggle Show off, to adopt it.)
+      obrl:   { show: false, enabled: true, threshold: 8,     dir: 'low',  scale: 6 },
+      ohh:    { show: false, enabled: true, threshold: 40,    dir: 'low',  scale: 12 },
       // ESPN ERA + WHIP - basic pitcher rate stats shaded in place. Lower = better. Highlight default OFF
       // (show is read-only on in the popup).
       era:    { show: true, enabled: false, threshold: 4.00,  dir: 'low',  scale: 1.5 },
@@ -403,6 +442,8 @@
     debug: 'debug',                 // chrome.storage.sync
     enabled: 'enabled',             // chrome.storage.sync (master on/off; absent = on)
     spSource: 'spSource',           // chrome.storage.sync (selected SP rank source id; absent = pitcherList)
+    // v7: pitcher records now carry kPct/bbPct (StatsAPI K%/BB%, joined by player_id) for the K%/BB%/K-BB%
+    //     columns; a v6 cache lacks them, so bump to rebuild rather than show blanks until the 12h TTL.
     // v6: the SP entry of the `pl` index is now source-tagged (spSrc/spSlug/spTier) so a non-PL starters
     //     source can be selected; closers + hitters stay Pitcher List.
     // v5: pitcher matchup now grades park-neutral team wOBA (was OPS); teamOff entries carry
@@ -410,12 +451,15 @@
     // v4: added team-offense (`teamOff`/`teamAbbr`) + the player's team id on the hand index (matchups).
     // v3: added the Savant percentile index (`pct`) for the player-card sliders.
     // v2: the hand index also carries the player's MLBAM id (used to compute QS).
-    cacheKey: (year) => `barrelVision:index:v6:${year}`,      // chrome.storage.local
+    cacheKey: (year) => `barrelVision:index:v7:${year}`,      // chrome.storage.local
     qsKey: (year) => `barrelVision:qs:v1:${year}`,            // chrome.storage.local (per-pitcher QS cache)
     splitsKey: (year) => `barrelVision:splits:v1:${year}`,    // chrome.storage.local (per-batter platoon splits)
     // v2: the weekly cache now carries the SP source id (`src`) so switching source forces a refetch.
     plKey: (year) => `barrelVision:pl:v2:${year}`,            // chrome.storage.local (weekly SP/PL cache)
     plOverride: (year) => `barrelVision:plOverride:v1:${year}`, // chrome.storage.local (manual-paste fallback)
+    // Per-list rank source health (rows parsed, source, mode, when) for the popup's "ranks last updated"
+    // line - written by getPL on every resolution (fetch/override/cache) so a graceful skip is visible.
+    plHealth: (year) => `barrelVision:plHealth:v1:${year}`,   // chrome.storage.local
   };
 
   root.BV = {
@@ -424,6 +468,6 @@
     normName, handWord, cellSignal, cellColor, defaultPrefs,
     defaultPlPrefs, mergePlPrefs, plPick, countIndex,
     spSourceList, validSpSource, spSourceCfg,
-    teamWoba, parkWobaMult, parkNeutralizeWoba, PARK_FACTORS,
+    teamWoba, parkWobaMult, parkNeutralizeWoba, PARK_FACTORS, pitchRates,
   };
 })(typeof self !== 'undefined' ? self : this);

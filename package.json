@@ -1,0 +1,9 @@
+{
+  "name": "barrel-vision",
+  "version": "0.17.0",
+  "private": true,
+  "description": "Dev-only test harness for Barrel Vision's shared pure helpers. The extension itself (src/) is buildless and has NO runtime dependencies — this file exists only so `npm test` runs the node:test suite. It is not part of the packaged extension (scripts/package.ps1 zips src/ only).",
+  "scripts": {
+    "test": "node --test \"tests/**/*.test.js\""
+  }
+}

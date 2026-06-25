@@ -113,6 +113,25 @@ async function buildFresh(forcePl) {
     ]);
   } catch (e) { console.warn(`[Barrel Vision] pitcher feeds skipped: ${e.message}`); }
 
+  // K% / BB% (doc SP priorities #2 + #5) from the StatsAPI season pitching line, joined onto the pitcher
+  // records by MLBAM id (Savant's player_id == StatsAPI person.id). ONE bulk call - no per-pitcher fetch -
+  // and best-effort: a failure just leaves the K%/BB%/K-BB% columns blank, everything else unaffected.
+  // K-BB% is derived in the column from kPct/bbPct (see CONFIG.columns.pit / BV.pitchRates).
+  try {
+    const pj = JSON.parse(await fetchText(BV.CONFIG.mlbPitching(Y)));
+    const splits = (pj.stats && pj.stats[0] && pj.stats[0].splits) || [];
+    const rates = {};
+    for (const s of splits) {
+      const id = s.player && s.player.id;
+      const r = BV.pitchRates(s.stat);
+      if (id != null && r) rates[id] = r;                          // keyed by MLBAM id (string-coerced)
+    }
+    for (const arr of Object.values(pit)) for (const rec of arr) {
+      const r = rates[rec.player_id];
+      if (r) { rec.kPct = r.kPct; rec.bbPct = r.bbPct; }
+    }
+  } catch (e) { console.warn(`[Barrel Vision] pitcher K%/BB% skipped: ${e.message}`); }
+
   // Savant percentile rankings (the 0-100 values behind the player-page sliders) - one CSV per type,
   // kept in a SEPARATE index (NOT merged into bat/pit: the percentile CSV reuses column names like
   // brl_percent that would clobber the raw values in those feeds). Each is optional on its own; a
@@ -484,6 +503,61 @@ async function getSelectedSpSource() {
   return BV.CONFIG.spSourceDefault;
 }
 
+// ---------------------------------------------------------------------------
+// Rank source health - a small per-list summary (rows parsed, source, mode, when) the popup shows as a
+// "ranks last updated" line, so a graceful skip (a site changed its page -> 0 rows rendered) is VISIBLE
+// instead of silent. Plain data only; persisted to its own local key on every getPL resolution.
+//   n      : rows that will render (0 = a skip/empty; for fetch this is post-minRows-gate)
+//   ok     : n > 0
+//   source : the human label of the list's source (SP = the selected source; closers/hitters = PL)
+//   url    : the resolved weekly article (when known)
+// ---------------------------------------------------------------------------
+function plListHealth(n, source, url) { return { n, ok: n > 0, source, url: url || '' }; }
+
+function plHealthFromFetch(srcId, sp, rp, hit, fetchedAt) {
+  const lbl = BV.spSourceCfg(srcId).label;
+  return {
+    fetchedAt, mode: 'fetched', spSource: srcId,
+    lists: {
+      sp: plListHealth(sp.rows.length, lbl, sp.url),
+      rp: plListHealth(rp.rows.length, 'Pitcher List', rp.url),
+      h:  plListHealth(hit.rows.length, 'Pitcher List', hit.url),
+    },
+  };
+}
+
+function plHealthFromOverride(srcId, sp, rp, hit, fetchedAt, spListUrl) {
+  return {
+    fetchedAt, mode: 'override', spSource: srcId,
+    lists: {
+      sp: plListHealth(sp.length, BV.spSourceCfg(srcId).label, spListUrl),
+      rp: plListHealth(rp.length, 'Pitcher List', ''),
+      h:  plListHealth(hit.length, 'Pitcher List', ''),
+    },
+  };
+}
+
+// Serving from the weekly cache: reuse the health stored when it was fetched (just relabel the mode);
+// fall back to deriving counts from the cached pl map for an older cache written before health existed.
+function plHealthFromCache(c) {
+  if (c.health) return { ...c.health, mode: 'cached' };
+  const vals = Object.values(c.pl || {});
+  const cnt = f => vals.filter(f).length;
+  const lbl = BV.spSourceCfg(c.src).label;
+  return {
+    fetchedAt: c.ts, mode: 'cached', spSource: c.src,
+    lists: {
+      sp: plListHealth(cnt(v => v && v.sp != null), lbl, ''),
+      rp: plListHealth(cnt(v => v && v.rp != null), 'Pitcher List', ''),
+      h:  plListHealth(cnt(v => v && v.h != null), 'Pitcher List', ''),
+    },
+  };
+}
+
+async function writePlHealth(year, health) {
+  try { await chrome.storage.local.set({ [BV.STORAGE.plHealth(year)]: health }); } catch (_) {}
+}
+
 async function getPL(force) {
   const Y = BV.CONFIG.year;
   const overKey = BV.STORAGE.plOverride(Y);
@@ -507,7 +581,11 @@ async function getPL(force) {
         const hit = o.hit ? parsePlText(o.hit) : [];
         // A pasted list has no per-player slug; for a player-page-less source (Razzball) link the badge
         // to that source's category page (latest list at the top) so it's still clickable.
-        if (sp.length || rp.length || hit.length) return buildPlMap(sp, rp, hit, srcId, src.playerUrl ? '' : src.spIndex);
+        if (sp.length || rp.length || hit.length) {
+          const spListUrl = src.playerUrl ? '' : src.spIndex;
+          await writePlHealth(Y, plHealthFromOverride(srcId, sp, rp, hit, o.ts || Date.now(), spListUrl));
+          return buildPlMap(sp, rp, hit, srcId, spListUrl);
+        }
       }
     } catch (_) {}
 
@@ -515,7 +593,10 @@ async function getPL(force) {
     //    cache miss, so it refetches rather than serving the other source's ranks).
     try {
       const c = (await chrome.storage.local.get(cacheK))[cacheK];
-      if (c && c.src === srcId && (Date.now() - c.ts) < ttl) return c.pl || {};
+      if (c && c.src === srcId && (Date.now() - c.ts) < ttl) {
+        await writePlHealth(Y, plHealthFromCache(c));
+        return c.pl || {};
+      }
     } catch (_) {}
   }
 
@@ -529,7 +610,11 @@ async function getPL(force) {
   // list article instead of a player page; sources with a playerUrl (PL, RotoBaller) link per-player.
   const spListUrl = src.playerUrl ? '' : (spRes.url || '');
   const pl = buildPlMap(spRes.rows, rpRes.rows, hitRes.rows, srcId, spListUrl);
-  try { await chrome.storage.local.set({ [cacheK]: { ts: Date.now(), src: srcId, pl } }); } catch (_) {}
+  const now = Date.now();
+  const health = plHealthFromFetch(srcId, spRes, rpRes, hitRes, now);
+  // Store health IN the weekly cache too, so a later cache-hit can report the same per-list counts/urls.
+  try { await chrome.storage.local.set({ [cacheK]: { ts: now, src: srcId, pl, health } }); } catch (_) {}
+  await writePlHealth(Y, health);
   return pl;
 }
 

@@ -32,8 +32,10 @@ player-page sliders — the actual stat value with the bar at the player's perce
 
 Everything is driven from the **toolbar popup** — per-column **Show** + **Highlight** toggles and
 thresholds, top-list ranks on/off (master + per-list), the **starters rank source** (Pitcher List /
-Razzball / RotoBaller), a master on/off switch, and a weekly rank refresh. Changes apply live, with no
-page reload.
+Razzball / RotoBaller), a master on/off switch, and a weekly rank refresh. Hovering a stat name shows a
+**tooltip** explaining what the metric is and which way is better. A small **source-health line** shows how many rows
+each rank list parsed and when it last updated — so a week a site changes its page (and the ranks
+gracefully skip) is visible, not silent. Changes apply live, with no page reload.
 
 <p align="center">
   <img src="docs/images/popup.png" width="380" alt="Barrel Vision toolbar popup: master on/off switch and per-column threshold controls for hitters and pitchers">
@@ -44,7 +46,8 @@ page reload.
 ## What it shows
 
 **Batters:** barrel%, hard-hit%, xwOBA, the **xwOBA−wOBA gap** (derived), avg EV, bat speed, squared-up%.
-**Pitchers:** xERA, the **ERA−xERA gap** (derived), opponent xwOBA, opponent barrel%, opponent hard-hit%.
+**Pitchers:** xERA, the **ERA−xERA gap** (derived), **K%, BB%, K−BB%** (from the MLB StatsAPI season line —
+the strikeout/walk skills Savant doesn't publish), opponent xwOBA, opponent barrel%, opponent hard-hit%.
 
 It also:
 - **Shades** ESPN's own OPS (batters) and ERA/WHIP (pitchers) with the same threshold gradient.
@@ -157,9 +160,9 @@ Nothing from your ESPN session is read, stored, or sent anywhere. Full details i
 ## Data sources & verified quirks
 
 Six public Baseball Savant CSV leaderboards (the five contact-quality feeds plus the percentile-rankings
-feed behind the player-card sliders), the MLB StatsAPI (roster + per-pitcher game logs), and public
-weekly ranking articles — closers + batters from Pitcher List, and starters from your choice of Pitcher
-List, Razzball, or RotoBaller. Headers were verified against the
+feed behind the player-card sliders), the MLB StatsAPI (roster + per-pitcher game logs + the season
+pitching line for K%/BB%), and public weekly ranking articles — closers + batters from Pitcher List, and
+starters from your choice of Pitcher List, Razzball, or RotoBaller. Headers were verified against the
 live feeds (2026
 in-season). Three counterintuitive quirks are handled deliberately and annotated in the code so they
 don't get "corrected" later:
@@ -194,6 +197,12 @@ scripts/     package.ps1 — zips src/ for store upload
 
 ## Status
 
+`v0.17.0` — added **pitcher K% / BB% / K−BB% columns** (the strikeout/walk skills Savant doesn't publish,
+self-computed from the MLB StatsAPI season pitching line and joined by MLBAM id — one bulk call, no new
+permission), a **rank source-health line** in the popup (rows parsed + freshness per list, so a gracefully
+skipped week is visible), and a **dependency-free unit suite** (`npm test`) that locks the sign quirks and
+the wOBA / park / shading / name-join math. Built on
+`v0.16.0` — two-way player card follows the Batting/Pitching toggle. Built on
 `v0.14.0` — reworked the **pitcher** matchup rating: the opponent-offense badge now grades **park-neutral
 team wOBA** (self-computed from StatsAPI components, not OPS), **folds in the day's ballpark**, and colours
 by a **continuous z-score** instead of the ordinal rank (the 1–30 number stays the OPRK-style label). Built on
