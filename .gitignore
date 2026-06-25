@@ -18,10 +18,14 @@ build/
 node_modules/
 package-lock.json
 
-# Local-only: kept out of the public repo (origin userscript + dev-only test harness)
+# Local-only: kept out of the public repo (origin userscript, dev-only test harness, internal docs).
+# docs/images/ stays tracked — the README displays those screenshots.
 userscript/
 tests/
 package.json
+docs/PROJECT_BARREL_VISION.md
+docs/PUBLISHING.md
+docs/fantasy_baseball_standards.md
 
 # Local scratch / logs
 *.log
