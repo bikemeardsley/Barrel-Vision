@@ -109,5 +109,5 @@ Barrel Vision runs today on **ESPN Fantasy Baseball** in Chrome and Edge. Planne
 
 ## License
 
-[MIT](LICENSE) © Mike Beardsley. Not affiliated with ESPN, MLB, Pitcher List, Razzball, or RotoBaller.
+[MIT](LICENSE) © Michael Beardsley. Not affiliated with ESPN, MLB, Pitcher List, Razzball, or RotoBaller.
 "Baseball Savant" and "Statcast" are properties of MLB Advanced Media.
