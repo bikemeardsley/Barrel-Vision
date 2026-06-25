@@ -18,5 +18,10 @@ build/
 node_modules/
 package-lock.json
 
+# Local-only: kept out of the public repo (origin userscript + dev-only test harness)
+userscript/
+tests/
+package.json
+
 # Local scratch / logs
 *.log
