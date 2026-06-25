@@ -49,9 +49,5 @@ removing the extension or clearing its storage from your browser's extension set
   only when chosen as the starting-pitcher rank source). The extension requests no access to ESPN or any
   other site's data.
 
-## Contact
-
-Questions: mike.beardsley24@gmail.com
-
 Barrel Vision is not affiliated with, endorsed by, or sponsored by ESPN, MLB, Pitcher List, Razzball, or
 RotoBaller. "Baseball Savant" and "Statcast" are properties of MLB Advanced Media.
