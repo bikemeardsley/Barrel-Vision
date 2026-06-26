@@ -41,6 +41,16 @@ td.savant-bubble::after {
 .savant-mu { white-space: nowrap; cursor: help; }
 .savant-mu-sym { font-size: 13px; line-height: 1; font-weight: 800; }
 
+/* The matchup mark sits at the right edge of the OPP cell, after the team abbrev. The widest case - a
+   two-triangle mark on an away game ("@LAA ▲▲") - overran ESPN's narrow OPP column and the trailing
+   triangle got clipped. Give that cell a touch more room and stop it clipping. Scoped with :has() to only
+   the cells we've actually marked, so a disabled overlay (no .savant-mu anywhere) changes nothing - which
+   means it also needs no teardown. (:has() is Chromium 105+ / Firefox 121+; the extension targets current
+   Chrome + Edge, so this is universally available - a pre-105 user would just see the old clipping, never
+   a broken layout.) */
+td:has(.savant-mu) { overflow: visible; min-width: 80px; }
+.opp:has(.savant-mu) { overflow: visible; min-width: 80px; }
+
 /* Pitcher List rank ("• PL #12"), right after handedness (pitchers only). A hair dimmer than the hand
    so the throwing hand stays the primary read; the source list (SP vs closer) + tier is in the tooltip. */
 .savant-pl { margin-left: 5px; color: #6f7888; font-weight: 700; cursor: help; }
@@ -71,3 +81,32 @@ td.savant-bubble::after {
   transform: translate(-50%, -50%); box-shadow: 0 0 0 2px #fff, 0 1px 2px rgba(0, 0, 0, .25);
 }
 .savant-slider-val { font-size: 12px; font-weight: 700; color: #2a2d33; text-align: right; font-variant-numeric: tabular-nums; }
+
+/* On-page master toggle ("Show Advanced Stats"), injected just left of ESPN's season-stats caption
+   ("Show Stats" / "Stats") on the Stats tab of the team, Free Agents and watchlist pages. Flips the SAME
+   chrome.storage.sync 'enabled' switch as the popup + toolbar menu, so all three stay in lockstep. The
+   label's font is copied from ESPN's caption at inject time (content.js applyCaptionFont) so it matches;
+   the rule below is the fallback if that caption can't be read. Survives the overlay teardown (it's how
+   you turn the overlay back on from the page). */
+.savant-page-toggle {
+  display: inline-flex; align-items: center; gap: 7px; vertical-align: middle;
+  font: inherit; white-space: nowrap; cursor: pointer;
+}
+.savant-page-toggle-lab { font-size: 12px; font-weight: 600; color: #6c727a; }
+/* Sits LEFT of ESPN's season-stats caption -> space on its right. */
+.savant-page-toggle--toolbar { margin-right: 14px; }
+
+/* iOS-style switch, the content-side twin of the popup's .bv-switch (a hair smaller to sit in the toolbar).
+   The checkbox is layered transparent over the track so native click/keyboard behaviour is kept; ESPN's
+   global form CSS can't touch the visual since the input is opacity:0 over our own slider. */
+.savant-switch { position: relative; display: inline-block; width: 32px; height: 18px; flex: none; cursor: pointer; }
+.savant-switch input[type="checkbox"] { position: absolute; inset: 0; width: 100%; height: 100%; margin: 0; opacity: 0; cursor: pointer; }
+.savant-switch-slider { position: absolute; inset: 0; background: #c9ccd2; border-radius: 999px; transition: background .18s ease; }
+.savant-switch-slider::before {
+  content: ""; position: absolute; height: 14px; width: 14px; left: 2px; top: 2px;
+  background: #fff; border-radius: 50%; box-shadow: 0 1px 2px rgba(0, 0, 0, .25);
+  transition: transform .18s ease;
+}
+.savant-switch input[type="checkbox"]:checked + .savant-switch-slider { background: #d62e2e; }   /* app red when on */
+.savant-switch input[type="checkbox"]:checked + .savant-switch-slider::before { transform: translateX(14px); }
+.savant-switch input[type="checkbox"]:focus-visible + .savant-switch-slider { box-shadow: 0 0 0 2px rgba(214, 46, 46, .4); }

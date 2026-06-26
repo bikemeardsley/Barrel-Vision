@@ -1029,10 +1029,11 @@
   // ---------------------------------------------------------------------------
   chrome.storage.onChanged.addListener((changes, area) => {
     if (area === 'sync') {
-      if (changes[BV.STORAGE.enabled]) {                          // master switch flipped (popup or icon menu)
+      if (changes[BV.STORAGE.enabled]) {                          // master switch flipped (popup, page toggle or icon menu)
         ENABLED = changes[BV.STORAGE.enabled].newValue !== false;
         if (ENABLED) start(); else stop();
-        return;                                                   // start()/stop() handle the rest
+        syncMasterToggle();                                       // mirror the new state on the on-page toggle
+        return;                                                   // start()/stop() handle the overlay itself
       }
       if (changes[BV.STORAGE.prefs]) {
         PREFS = mergePrefs(changes[BV.STORAGE.prefs].newValue);
@@ -1109,10 +1110,160 @@
   }
 
   // ---------------------------------------------------------------------------
+  // On-page master toggle ("Show Advanced Stats") - a second face of the popup's
+  // master switch, on the Stats-tab toolbar (team / Free Agents / watchlist pages),
+  // just LEFT of ESPN's own season-stats caption ("Show Stats" / "Stats"), whose
+  // font we copy so the two read as one control. It writes the SAME
+  // chrome.storage.sync 'enabled' key, so flipping it - or the popup, or the toolbar
+  // menu - all converge: storage.onChanged fans the new state back out to every
+  // surface (incl. this toggle, via syncMasterToggle).
+  //
+  // It is maintained by its OWN always-on observer (pageMo), independent of the
+  // overlay's start()/stop() lifecycle - the whole point is to offer an ON switch
+  // while the overlay is OFF, so it must render even when start() never runs. It
+  // does no fetching and wakes no service worker (purely a DOM control), so "off"
+  // stays light. teardown() leaves it alone (its classes aren't in teardown's set).
+  // ---------------------------------------------------------------------------
+  let pageMo = null, pageToggleTimer = null;
+
+  // Which view counts as the Stats tab. ESPN makes Stats the DEFAULT tab on the team, Free Agents
+  // (players/add) and watchlist pages, so a bare URL with no `view` param IS the Stats tab; an explicit
+  // `view=stats` is too. Any OTHER view (trending / schedule / news / eligibility / …) must hide the
+  // toggle. (User-confirmed rule: show when view is absent OR view=stats; hide for any other value.)
+  function onStatsView() {
+    const m = location.search.match(/[?&]view=([^&]*)/i);
+    if (!m) return true;                                  // no view param -> default Stats tab
+    const v = (m[1] || '').toLowerCase();
+    return v === '' || v === 'stats';                     // empty (?view=) or stats -> Stats tab; else hide
+  }
+
+  // We anchor off ESPN's season dropdown ("2026 season") - the one Stats-toolbar control common to all
+  // three pages and independent of ESPN's obfuscated classes. (The caption beside it differs by page -
+  // "Show Stats" on the team page, "Stats" on Free Agents / watchlist - so we don't key the anchor on it.)
+  function isSeasonSelect(el) {
+    if (!el || el.tagName !== 'SELECT') return false;
+    const opt = el.options && el.options[el.selectedIndex];
+    if (opt && /\bseason\b/i.test(opt.textContent || '')) return true;
+    return [...(el.options || [])].some(o => /\bseason\b/i.test(o.textContent || ''));   // e.g. "2026 season"
+  }
+  function findSeasonSelect() {
+    for (const s of document.querySelectorAll('select')) if (isSeasonSelect(s)) return s;
+    return null;
+  }
+  // ESPN's caption beside that dropdown ("Show Stats" / "Stats"). We place our toggle just LEFT of it and
+  // copy its font so "Show Advanced Stats" matches. Found by climbing from the select: the caption may be
+  // the select's previous sibling, or a sibling of the select's wrapper.
+  // The caption is a plain label, never a link. ESPN's "Stats" SUB-TAB is an <a> with the same text, so
+  // excluding anchors keeps the climb (and the fast-path re-check) from ever latching onto the sub-tab
+  // instead of the season caption.
+  function isStatsLabel(el) {
+    return !!el && el.tagName !== 'A' && /^(show\s+)?stats$/i.test((el.textContent || '').trim());
+  }
+  function findStatsCaption() {
+    let node = findSeasonSelect();
+    for (let up = 0; up < 3 && node; up++) {              // the select, its wrapper, the wrapper's parent
+      if (isStatsLabel(node.previousElementSibling)) return node.previousElementSibling;
+      node = node.parentElement;
+    }
+    return null;
+  }
+  // Copy ESPN's caption font onto our label so the two read as one control. Longhands, not the `font`
+  // shorthand (Chrome won't reliably serialise that from getComputedStyle).
+  function applyCaptionFont(toggle, caption) {
+    if (!caption) return;
+    const lab = toggle.querySelector('.savant-page-toggle-lab');
+    if (!lab) return;
+    const cs = getComputedStyle(caption);
+    for (const p of ['fontFamily', 'fontSize', 'fontWeight', 'fontStyle', 'lineHeight', 'letterSpacing', 'textTransform', 'color']) {
+      lab.style[p] = cs[p];
+    }
+  }
+
+  function buildMasterToggle(variant) {
+    const wrap = document.createElement('label');
+    wrap.className = 'savant-page-toggle' + (variant ? ' ' + variant : '');   // variant = where it's mounted
+    wrap.title = 'Show Barrel Vision advanced stats';
+    const lab = document.createElement('span');
+    lab.className = 'savant-page-toggle-lab';
+    lab.textContent = 'Show Advanced Stats';
+    const sw = document.createElement('span');
+    sw.className = 'savant-switch';
+    const input = document.createElement('input');
+    input.type = 'checkbox';
+    input.className = 'savant-page-toggle-input';
+    input.checked = ENABLED;
+    const slider = document.createElement('span');
+    slider.className = 'savant-switch-slider';
+    sw.append(input, slider);
+    wrap.append(lab, sw);
+    // Write-only: don't flip the overlay here. storage.onChanged is the single path that reacts to
+    // 'enabled' (start()/stop() + syncMasterToggle), so the popup, menu and page all take the same route.
+    input.addEventListener('change', () => {
+      chrome.storage.sync.set({ [BV.STORAGE.enabled]: input.checked });
+    });
+    return wrap;
+  }
+
+  // Reflect the current ENABLED state onto EVERY on-page toggle (toolbar + modal), whatever surface changed
+  // it. No-op when none are on the page yet.
+  function syncMasterToggle() {
+    for (const input of document.querySelectorAll('.savant-page-toggle-input')) input.checked = ENABLED;
+  }
+
+  // Stats-tab TOOLBAR toggle (team / Free Agents / watchlist), placed left of ESPN's season-stats caption.
+  // The view gate runs FIRST, so switching to a non-Stats tab removes it even if the toolbar (and our
+  // anchor) persist. Fast path: when already sitting next to the season control we leave it (no
+  // document-wide scan), so ESPN's constant live-score mutations stay cheap and we don't churn the DOM.
+  function ensureToolbarToggle() {
+    const existing = document.querySelector('.savant-page-toggle--toolbar');
+    if (!onStatsView()) { if (existing) existing.remove(); return; }       // non-Stats view -> never show
+    if (existing && existing.isConnected) {
+      const sib = existing.nextElementSibling;
+      if (isStatsLabel(sib) || isSeasonSelect(sib)) return;                // still anchored
+    }
+    const caption = findStatsCaption();
+    const anchor = caption || findSeasonSelect();
+    if (!anchor || !anchor.parentNode) { if (existing) existing.remove(); return; }   // toolbar not up / detached
+    if (existing) existing.remove();
+    const toggle = buildMasterToggle('savant-page-toggle--toolbar');
+    anchor.parentNode.insertBefore(toggle, anchor);                       // toggle on the left, ESPN's caption on the right
+    applyCaptionFont(toggle, caption);                                    // match ESPN's "Show Stats" / "Stats" font
+  }
+
+  // Maintain the toolbar toggle for the current DOM, then sync it to ENABLED. ESPN re-renders the toolbar
+  // on tab changes, so ensureToolbarToggle re-anchors if our node drifted and self-heals if React dropped
+  // it - the next mutation re-runs this.
+  function ensureMasterToggle() {
+    ensureToolbarToggle();
+    syncMasterToggle();
+  }
+
+  function schedulePageToggle() {
+    if (pageToggleTimer) return;
+    pageToggleTimer = setTimeout(() => {
+      pageToggleTimer = null;
+      try { ensureMasterToggle(); } catch (_) { /* toolbar mid-render; retry next mutation */ }
+    }, BV.CONFIG.scanDebounceMs);
+  }
+
+  // Always-on (independent of ENABLED), so the toggle renders - and can turn the overlay back ON - even
+  // while the overlay is off. Idempotent: a second call just keeps the single observer. The MutationObserver
+  // catches ESPN's SPA re-renders (tab switches re-render the toolbar); popstate covers browser back/forward
+  // between tabs, where the URL view changes without a DOM burst of its own.
+  function startPageToggleObserver() {
+    try { ensureMasterToggle(); } catch (_) { /* toolbar not up yet; pageMo will catch it */ }
+    if (pageMo) return;
+    pageMo = new MutationObserver(schedulePageToggle);
+    pageMo.observe(document.body, { childList: true, subtree: true });
+    window.addEventListener('popstate', schedulePageToggle);
+  }
+
+  // ---------------------------------------------------------------------------
   // Boot
   // ---------------------------------------------------------------------------
   (async () => {
     await loadState();
-    if (ENABLED) start(); else updateHud();                      // off: do nothing (no fetch, no observer)
+    startPageToggleObserver();                                   // always-on: the page toggle works even while the overlay is off
+    if (ENABLED) start(); else updateHud();                      // off: do no overlay work (no fetch, no overlay observer)
   })();
 })();
