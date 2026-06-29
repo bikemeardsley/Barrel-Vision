@@ -106,6 +106,188 @@
   }
 
   // ---------------------------------------------------------------------------
+  // Matchup analyzer - weekly category PROJECTION math (pure + shared). The boxscore
+  // page shows a live 2-row category table; these helpers project each team's WEEKLY
+  // total per category from the CURRENT roster (DOM-scraped) x public StatsAPI rates,
+  // bottom-up so trades/adds/drops are reflected automatically. RATE cats
+  // (OPS/ERA/WHIP) are volume-weighted from summed component COUNTS - never averaged -
+  // exactly like teamWoba.
+  // ---------------------------------------------------------------------------
+
+  // StatsAPI inningsPitched is a thirds STRING: '6.1' = 6 1/3, '6.2' = 6 2/3, '6.0' = 6.
+  // (Promoted from background.js so the QS, ERA and WHIP volume math share one parser.)
+  function ipToNum(s) { const [w, f] = String(s == null ? '' : s).split('.'); return (+w || 0) + ((+f || 0) / 3); }
+
+  // Normalize a StatsAPI hitting `stat` object to the component vector the projection uses (missing -> 0).
+  // `g` = gamesPlayed is the per-game denominator for the counting-cat rates.
+  function hitComponents(stat) {
+    if (!stat) return null;
+    const n = k => { const v = parseFloat(stat[k]); return Number.isFinite(v) ? v : 0; };
+    return {
+      g: n('gamesPlayed'), pa: n('plateAppearances'), ab: n('atBats'), h: n('hits'),
+      dbl: n('doubles'), tpl: n('triples'), hr: n('homeRuns'), bb: n('baseOnBalls'),
+      hbp: n('hitByPitch'), sf: n('sacFlies'), r: n('runs'), rbi: n('rbi'), sb: n('stolenBases'),
+    };
+  }
+
+  // Normalize a StatsAPI pitching `stat` object to the component vector (missing -> 0). `ip` parsed from
+  // thirds notation; `gs` (gamesStarted) / `app` (gamesPitched) are the per-start / per-appearance denoms.
+  function pitComponents(stat) {
+    if (!stat) return null;
+    const n = k => { const v = parseFloat(stat[k]); return Number.isFinite(v) ? v : 0; };
+    return {
+      ip: ipToNum(stat.inningsPitched), er: n('earnedRuns'), h: n('hits'), bb: n('baseOnBalls'),
+      k: n('strikeOuts'), gs: n('gamesStarted'), app: n('gamesPitched'), sv: n('saves'),
+      w: n('wins'), hld: n('holds'),
+    };
+  }
+
+  // Is a scheduled game still PROJECTABLE (not yet started)? StatsAPI status.abstractGameState is
+  // Preview (not started) / Live (in progress) / Final (done). Only Preview games are projected forward -
+  // Live/Final production is already in ESPN's scraped live totals, so projecting them would double-count.
+  function isRemainingGame(abstractGameState) { return abstractGameState === 'Preview'; }
+
+  // Blend a season rate with a recent-form rate, down-weighting recent when its sample is thin:
+  //   wEff  = w * recentDenom / (recentDenom + shrinkK)   (so a 3-game hot streak can't dominate)
+  //   blend = wEff*recent + (1-wEff)*season
+  // Falls back gracefully: only-season -> season; only-recent (IL returnee) -> recent; neither -> NaN.
+  function blendRate(seasonRate, recentRate, w, recentDenom, shrinkK) {
+    const s = Number.isFinite(seasonRate) ? seasonRate : NaN;
+    const r = Number.isFinite(recentRate) ? recentRate : NaN;
+    if (!Number.isFinite(s) && !Number.isFinite(r)) return NaN;
+    if (!Number.isFinite(r)) return s;
+    if (!Number.isFinite(s)) return r;
+    const d = Number.isFinite(recentDenom) ? recentDenom : 0;
+    const k = Number.isFinite(shrinkK) ? shrinkK : 0;
+    const denom = d + k;
+    const wEff = denom > 0 ? (w || 0) * (d / denom) : 0;
+    return wEff * r + (1 - wEff) * s;
+  }
+
+  // Team OPS from SUMMED hitting components (volume-weighted; never average per-player OPS). Mirrors the
+  // teamWoba discipline: OBP = (H+BB+HBP)/(AB+BB+HBP+SF), SLG = TB/AB, OPS = OBP+SLG. NaN if no AB/PA base.
+  function aggOPS(c) {
+    if (!c) return NaN;
+    const ab = +c.ab || 0, h = +c.h || 0, dbl = +c.dbl || 0, tpl = +c.tpl || 0, hr = +c.hr || 0,
+          bb = +c.bb || 0, hbp = +c.hbp || 0, sf = +c.sf || 0;
+    const obpDen = ab + bb + hbp + sf;
+    if (!(ab > 0) || !(obpDen > 0)) return NaN;
+    const tb = (h - dbl - tpl - hr) + 2 * dbl + 3 * tpl + 4 * hr;     // 1B*1 + 2B*2 + 3B*3 + HR*4
+    return (h + bb + hbp) / obpDen + tb / ab;
+  }
+
+  // Volume-weighted pitching rate cats from summed components (never average per-pitcher ERA/WHIP).
+  function aggEra(er, ip) { return ip > 0 ? 9 * (+er || 0) / ip : NaN; }
+  function aggWhip(bb, h, ip) { return ip > 0 ? ((+bb || 0) + (+h || 0)) / ip : NaN; }
+
+  // Project a hitter's component COUNTS over `games` games, blending season + recent per-game rates.
+  // Used twice: games = remaining-this-week (counting cats: live + projected-remaining) and games =
+  // whole-week (OPS: pool projected components, then aggOPS). opts: { w, shrinkK }.
+  const HIT_KEYS = ['pa', 'ab', 'h', 'dbl', 'tpl', 'hr', 'bb', 'hbp', 'sf', 'r', 'rbi', 'sb'];
+  function projHit(season, recent, games, opts) {
+    const w = opts && Number.isFinite(opts.w) ? opts.w : 0.40;
+    const k = opts && Number.isFinite(opts.shrinkK) ? opts.shrinkK : 10;   // games
+    const g = Math.max(0, +games || 0);
+    const rg = recent && recent.g > 0 ? recent.g : 0;
+    const out = {};
+    for (const key of HIT_KEYS) {
+      const sr = season && season.g > 0 ? season[key] / season.g : NaN;
+      const rr = rg > 0 ? recent[key] / rg : NaN;
+      const rate = blendRate(sr, rr, w, rg, k);
+      out[key] = Number.isFinite(rate) ? rate * g : 0;
+    }
+    return out;
+  }
+
+  // Project a starting pitcher's component COUNTS over `starts` starts (per-start rates, season+recent
+  // blended, shrunk by recent starts). Returns { k, ip, er, h, bb }. QS is derived separately from the
+  // gameLog (>=6 IP & <=3 ER per start); SV is role-based - both are phase-2.
+  const START_KEYS = ['k', 'ip', 'er', 'h', 'bb'];
+  function projStarter(season, recent, starts, opts) {
+    const w = opts && Number.isFinite(opts.w) ? opts.w : 0.40;
+    const k = opts && Number.isFinite(opts.shrinkK) ? opts.shrinkK : 4;    // starts
+    const n = Math.max(0, +starts || 0);
+    const rgs = recent && recent.gs > 0 ? recent.gs : 0;
+    const out = {};
+    for (const key of START_KEYS) {
+      const sr = season && season.gs > 0 ? season[key] / season.gs : NaN;
+      const rr = rgs > 0 ? recent[key] / rgs : NaN;
+      const rate = blendRate(sr, rr, w, rgs, k);
+      out[key] = Number.isFinite(rate) ? rate * n : 0;
+    }
+    return out;
+  }
+
+  // Project a pitcher's component COUNTS over `outings` outings, using per-start (denomKey 'gs') or
+  // per-appearance (denomKey 'app') blended rates. Returns { k, ip, er, h, bb, w, sv, hld }.
+  const PIT_KEYS = ['k', 'ip', 'er', 'h', 'bb', 'w', 'sv', 'hld'];
+  function projPitcher(season, recent, outings, denomKey, opts) {
+    const w = opts && Number.isFinite(opts.w) ? opts.w : 0.40;
+    const k = opts && Number.isFinite(opts.shrinkK) ? opts.shrinkK : (denomKey === 'gs' ? 4 : 12);
+    const n = Math.max(0, +outings || 0);
+    const sd = season && season[denomKey] > 0 ? season[denomKey] : 0;
+    const rd = recent && recent[denomKey] > 0 ? recent[denomKey] : 0;
+    const out = {};
+    for (const key of PIT_KEYS) {
+      const sr = sd > 0 ? season[key] / sd : NaN;
+      const rr = rd > 0 ? recent[key] / rd : NaN;
+      const rate = blendRate(sr, rr, w, rd, k);
+      out[key] = Number.isFinite(rate) ? rate * n : 0;
+    }
+    return out;
+  }
+
+  // Aggregate a team's STABLE FULL-WEEK projection from per-player inputs (pure; the content script supplies
+  // the players + their full-week games/starts/appearances from the DOM + schedule, so the whole pipeline -
+  // not just per-player math - is testable here). This is a whole-week total (NOT live + remaining): the
+  // projected number stays comparable to the actual at week's end, and a future version can fold in
+  // in-week progress + show shift arrows.
+  //   hitters:  [{ season, recent, games }]                                    games = team games this week
+  //   pitchers: [{ season, recent, starts, apps, isSP, isCloser, qsRate }]     starts/apps = full-week outings
+  // Returns:
+  //   count - full-week counting totals { R,HR,RBI,SB, K,QS,W,SV,HLD } (SVHD = SV + HLD)
+  //   rate  - full-week rate cats { AVG,OBP,SLG,OPS, ERA,WHIP } (volume-weighted from pooled components)
+  //   batG / gs / app - context (hitter-games, projected starts, projected relief appearances).
+  function projectTeam(hitters, pitchers, opts) {
+    const count = { R: 0, HR: 0, RBI: 0, SB: 0, K: 0, QS: 0, W: 0, SV: 0, HLD: 0 };
+    const hpool = { ab: 0, h: 0, dbl: 0, tpl: 0, hr: 0, bb: 0, hbp: 0, sf: 0 };
+    const ppool = { ip: 0, er: 0, bb: 0, h: 0 };
+    let batG = 0, gs = 0, app = 0;
+    for (const p of (hitters || [])) {
+      const pw = projHit(p.season, p.recent, p.games, opts);
+      count.R += pw.r; count.HR += pw.hr; count.RBI += pw.rbi; count.SB += pw.sb;
+      for (const k in hpool) hpool[k] += pw[k] || 0;
+      batG += Math.max(0, +p.games || 0);
+    }
+    for (const p of (pitchers || [])) {
+      const outings = p.isSP ? (+p.starts || 0) : (+p.apps || 0);
+      const pp = projPitcher(p.season, p.recent, outings, p.isSP ? 'gs' : 'app', opts);
+      count.K += pp.k;
+      ppool.ip += pp.ip; ppool.er += pp.er; ppool.bb += pp.bb; ppool.h += pp.h;
+      if (p.isSP) {
+        gs += (+p.starts || 0);
+        count.W += pp.w;
+        count.QS += (Number.isFinite(p.qsRate) ? p.qsRate : 0) * (+p.starts || 0);
+      } else {
+        app += (+p.apps || 0);
+        count.HLD += pp.hld;
+        if (p.isCloser) count.SV += pp.sv;
+      }
+    }
+    const ab = hpool.ab, obpDen = ab + hpool.bb + hpool.hbp + hpool.sf;
+    const tb = (hpool.h - hpool.dbl - hpool.tpl - hpool.hr) + 2 * hpool.dbl + 3 * hpool.tpl + 4 * hpool.hr;
+    const rate = {
+      OPS: aggOPS(hpool),
+      AVG: ab > 0 ? hpool.h / ab : NaN,
+      OBP: obpDen > 0 ? (hpool.h + hpool.bb + hpool.hbp) / obpDen : NaN,
+      SLG: ab > 0 ? tb / ab : NaN,
+      ERA: aggEra(ppool.er, ppool.ip),
+      WHIP: aggWhip(ppool.bb, ppool.h, ppool.ip),
+    };
+    return { count, rate, batG, gs, app };
+  }
+
+  // ---------------------------------------------------------------------------
   // Name normalization - the join key between ESPN DOM names and Savant feeds.
   // Strips accents / punctuation / suffixes. Used in BOTH the SW (to key the
   // index) and the content script (to normalize DOM names before lookup), so it
@@ -134,6 +316,50 @@
     minBattedBalls: 10,          // keep part-time guys (Barrel Hunting targets), not just qualifiers
     scanDebounceMs: 400,         // coalesce MutationObserver bursts - ESPN's live scores mutate constantly
     hideResearchColumns: true,   // hide ESPN's low-value Research cols (PR15 / %ROST / +/-) to make room
+
+    // -----------------------------------------------------------------------
+    // Matchup analyzer (boxscore page) - the H2H scoring categories the weekly
+    // projection can cover (a superset; each league selects its own subset in the
+    // popup). group = roster side; type count|rate; dir = which way WINS the cat
+    // (high = more is better, low = ERA/WHIP); scale = the weekly MARGIN (display
+    // units) that reads as a comfortable category win - drives the win/loss board
+    // tint via cellSignal; field = the StatsAPI counting field; est = the projection
+    // is estimate-heavy (pitching cats: they hinge on a start-count / role model and
+    // confirmed probables, so the board marks them with ~). derive = a cat composed
+    // from others (SVHD = SV + HLD). cal = a per-category calibration multiplier (default 1) applied to the
+    // projection in the content layer, from back-testing vs actual weekly totals: hitting power runs a touch
+    // hot (R/HR), ERA/WHIP project ~10-13% optimistic (streamer/spot-start blow-ups the model can't see),
+    // and saves over-project (closer appearance estimate). Uniform per cat, so it sharpens the displayed
+    // number + accuracy without changing which team is projected to win the cat. Re-tune as the log grows.
+    cats: {
+      // Hitting
+      R:    { label: 'R',    group: 'bat', type: 'count', dir: 'high', scale: 8,     field: 'runs',        cal: 0.92 },
+      HR:   { label: 'HR',   group: 'bat', type: 'count', dir: 'high', scale: 4,     field: 'homeRuns',    cal: 0.91 },
+      RBI:  { label: 'RBI',  group: 'bat', type: 'count', dir: 'high', scale: 8,     field: 'rbi' },
+      SB:   { label: 'SB',   group: 'bat', type: 'count', dir: 'high', scale: 3,     field: 'stolenBases' },
+      AVG:  { label: 'AVG',  group: 'bat', type: 'rate',  dir: 'high', scale: 0.020 },
+      OBP:  { label: 'OBP',  group: 'bat', type: 'rate',  dir: 'high', scale: 0.025 },
+      SLG:  { label: 'SLG',  group: 'bat', type: 'rate',  dir: 'high', scale: 0.040 },
+      OPS:  { label: 'OPS',  group: 'bat', type: 'rate',  dir: 'high', scale: 0.030 },
+      // Pitching (est: start-count / role estimates)
+      K:    { label: 'K',    group: 'pit', type: 'count', dir: 'high', scale: 12,    field: 'strikeOuts', est: true },
+      QS:   { label: 'QS',   group: 'pit', type: 'count', dir: 'high', scale: 2,                          est: true },
+      W:    { label: 'W',    group: 'pit', type: 'count', dir: 'high', scale: 2,     field: 'wins',       est: true },
+      SV:   { label: 'SV',   group: 'pit', type: 'count', dir: 'high', scale: 2,     field: 'saves',      est: true, cal: 0.84 },
+      HLD:  { label: 'HLD',  group: 'pit', type: 'count', dir: 'high', scale: 3,     field: 'holds',      est: true },
+      SVHD: { label: 'SVHD', group: 'pit', type: 'count', dir: 'high', scale: 3,     derive: 'sv+hld',    est: true },
+      ERA:  { label: 'ERA',  group: 'pit', type: 'rate',  dir: 'low',  scale: 0.60,                       est: true, cal: 1.13 },
+      WHIP: { label: 'WHIP', group: 'pit', type: 'rate',  dir: 'low',  scale: 0.12,                       est: true, cal: 1.10 },
+    },
+
+    // Default league format (user-editable in the popup). Defaults to the developer's league: H2H
+    // categories, weekly Mon-Sun matchups, these 10 cats. weekStartDow: 1 = Monday (JS Date.getDay).
+    leagueFormatDefault: {
+      scoring: 'h2h_categories',
+      period: 'weekly',
+      weekStartDow: 1,
+      cats: ['R', 'HR', 'RBI', 'SB', 'OPS', 'K', 'QS', 'SV', 'ERA', 'WHIP'],
+    },
 
     // Savant CSV endpoints. All five verified to return CSV with the headers below
     // (re-verified live against 2026 in-season data during the MV3 port).
@@ -195,6 +421,17 @@
     // statsapi host already permitted - no new source. `playerPool=all` + a high limit returns the whole
     // pool (incl. relievers); each split carries player.id and stat.{strikeOuts,baseOnBalls,battersFaced}.
     mlbPitching: (year) => `https://statsapi.mlb.com/api/v1/stats?stats=season&group=pitching&season=${year}&sportId=1&playerPool=all&limit=2000&gameType=R`,
+
+    // Matchup analyzer (boxscore page) - bulk component lines + the week's schedule. Public StatsAPI, no
+    // key; the SEASON pitching bulk reuses mlbPitching above (it already carries K/IP/ER/BB/H/SV/GS).
+    // playerPool=all + a high limit returns the whole pool; byDateRange is the recent-form window (~30d);
+    // schedule?hydrate=probablePitcher gives games-per-team + near-term starters (probables post only
+    // ~2-4 days out, so back-half-of-week starts are estimated content-side, not from this feed). All
+    // verified live 2026. dates are YYYY-MM-DD.
+    mlbHitting:       (year) => `https://statsapi.mlb.com/api/v1/stats?stats=season&group=hitting&season=${year}&sportId=1&playerPool=all&limit=2000&gameType=R`,
+    mlbHittingRange:  (year, start, end) => `https://statsapi.mlb.com/api/v1/stats?stats=byDateRange&group=hitting&season=${year}&sportId=1&playerPool=all&limit=2000&startDate=${start}&endDate=${end}&gameType=R`,
+    mlbPitchingRange: (year, start, end) => `https://statsapi.mlb.com/api/v1/stats?stats=byDateRange&group=pitching&season=${year}&sportId=1&playerPool=all&limit=2000&startDate=${start}&endDate=${end}&gameType=R`,
+    mlbSchedule:      (start, end) => `https://statsapi.mlb.com/api/v1/schedule?sportId=1&startDate=${start}&endDate=${end}&hydrate=probablePitcher`,
 
     // Closers + hitters ALWAYS come from Pitcher List (the selectable SP sources below publish STARTERS
     // only): reliever "Top 50 Closers" and the "Top 150 Hitters" list. Weekly ARTICLES (no API), each a
@@ -432,6 +669,38 @@
   // Default Pitcher List display toggles, merged with any saved subset (so new lists default sensibly).
   function defaultPlPrefs() { return { ...CONFIG.plPrefs }; }
   function mergePlPrefs(saved) { return { ...CONFIG.plPrefs, ...(saved && typeof saved === 'object' ? saved : {}) }; }
+
+  // League format (matchup analyzer). Deep-clone the default; merge a saved subset, keeping only known
+  // category keys (an unknown/empty cats list falls back to the default 10) so a stale save can't break
+  // the board. Mirrors the defaultPrefs/mergePrefs discipline.
+  function defaultLeagueFormat() { return JSON.parse(JSON.stringify(CONFIG.leagueFormatDefault)); }
+  function mergeLeagueFormat(saved) {
+    const base = defaultLeagueFormat();
+    if (saved && typeof saved === 'object') {
+      if (typeof saved.scoring === 'string') base.scoring = saved.scoring;
+      if (typeof saved.period === 'string') base.period = saved.period;
+      if (Number.isInteger(saved.weekStartDow)) base.weekStartDow = saved.weekStartDow;
+      if (Array.isArray(saved.cats)) {
+        const known = saved.cats.filter(k => CONFIG.cats[k]);
+        if (known.length) base.cats = known;
+      }
+    }
+    return base;
+  }
+  // Resolve a format's selected categories to ordered cat objects ({ key, ...CONFIG.cats[key] }).
+  function catList(format) {
+    const keys = (format && Array.isArray(format.cats) ? format.cats : CONFIG.leagueFormatDefault.cats)
+      .filter(k => CONFIG.cats[k]);
+    return keys.map(k => ({ key: k, ...CONFIG.cats[k] }));
+  }
+  // Board tint signal: signed normalized margin (self - opp) for a cat, via the same cellSignal engine the
+  // column shading uses (red = this side projected to win, blue = lose, |t| = margin confidence). dir:'low'
+  // cats (ERA/WHIP) flip the sign inside cellSignal. Returns { t, better } or null (missing value / exact tie).
+  function matchupSignal(cat, selfVal, oppVal) {
+    if (!cat || !Number.isFinite(selfVal) || !Number.isFinite(oppVal)) return null;
+    const pref = { x: { enabled: true, threshold: 0, dir: cat.dir, scale: cat.scale } };
+    return cellSignal(pref, 'x', selfVal - oppVal);
+  }
   // Resolve which rank to display for a record given the toggles + row kind. Returns
   // { rank, list:'sp'|'rp'|'h', src, slug, tier } or null when nothing should show. The SP rank carries
   // its own source (rec.spSrc/spSlug/spTier) so the badge can label + link it correctly; closers and
@@ -459,9 +728,17 @@
   // Storage keys (chrome.storage). Cache key is versioned + year-scoped.
   const STORAGE = {
     prefs: 'prefs',                 // chrome.storage.sync
+    leagueFormat: 'leagueFormat',   // chrome.storage.sync (matchup-analyzer league config: scoring/period/cats)
+    matchupOn: 'matchupOn',         // chrome.storage.sync (matchup analyzer on/off; absent = on)
     plPrefs: 'plPrefs',             // chrome.storage.sync (Pitcher List display toggles: {on,sp,rp,h})
     debug: 'debug',                 // chrome.storage.sync
-    enabled: 'enabled',             // chrome.storage.sync (master on/off; absent = on)
+    enabled: 'enabled',             // chrome.storage.sync (master on/off for the WHOLE extension; absent = on)
+    // Advanced Stats feature on/off (injected Savant columns + ESPN OPS/ERA/WHIP cell highlighting +
+    // handedness + the per-row matchup symbols + the player-card Advanced table/sliders). Independent of
+    // `enabled` (the whole-extension switch) and of the Top-list-ranks / Matchup-analyzer feature toggles,
+    // so a user can keep ranks/matchup while turning the advanced overlay off. Absent = on. The on-page
+    // "Show Advanced Stats · Barrel Vision" toggle and the popup's Advanced Stats tab both write this key.
+    advancedOn: 'advancedOn',       // chrome.storage.sync (advanced-stats overlay on/off; absent = on)
     spSource: 'spSource',           // chrome.storage.sync (selected SP rank source id; absent = pitcherList)
     // v7: pitcher records now carry kPct/bbPct (StatsAPI K%/BB%, joined by player_id) for the K%/BB%/K-BB%
     //     columns; a v6 cache lacks them, so bump to rebuild rather than show blanks until the 12h TTL.
@@ -481,6 +758,14 @@
     // Per-list rank source health (rows parsed, source, mode, when) for the popup's "ranks last updated"
     // line - written by getPL on every resolution (fetch/override/cache) so a graceful skip is visible.
     plHealth: (year) => `barrelVision:plHealth:v1:${year}`,   // chrome.storage.local
+    // Matchup analyzer: season+recent component lines (12h, year-scoped) and the week schedule/probables
+    // (3h, window-scoped - probables + played/remaining move through the day).
+    matchupStatsKey: (year) => `barrelVision:mxstats:v1:${year}`,  // chrome.storage.local
+    matchupSchedKey: (year) => `barrelVision:mxsched:v1:${year}`,  // chrome.storage.local
+    // Projection accuracy log (local only, no backend): per league+week+team it stores a daily projection
+    // snapshot (projByDay) + the latest LIVE actual. Powers the daily up/down shift arrows, lets us measure
+    // projection error over a few weeks to tune the model, and doubles as a cross-page projection cache.
+    matchupLog:      (year) => `barrelVision:mxlog:v1:${year}`,    // chrome.storage.local
   };
 
   root.BV = {
@@ -490,5 +775,8 @@
     defaultPlPrefs, mergePlPrefs, plPick, countIndex,
     spSourceList, validSpSource, spSourceCfg,
     teamWoba, parkWobaMult, parkNeutralizeWoba, PARK_FACTORS, pitchRates,
+    ipToNum, isRemainingGame, hitComponents, pitComponents, blendRate, aggOPS, aggEra, aggWhip,
+    projHit, projStarter, projPitcher, projectTeam,
+    defaultLeagueFormat, mergeLeagueFormat, catList, matchupSignal,
   };
 })(typeof self !== 'undefined' ? self : this);

@@ -253,10 +253,8 @@ async function ensureIndex(force) {
 // ---------------------------------------------------------------------------
 // Quality Starts - computed per pitcher from the StatsAPI gameLog (>=6 IP & <=3 ER per start).
 // QS is not a field on Savant or StatsAPI; this is the only authoritative source. Cached per id.
-// inningsPitched is a string like "6.1" (6 and 1/3) - parse the fractional part as thirds.
+// inningsPitched is a string like "6.1" (6 and 1/3) - BV.ipToNum (core.js) parses the fraction as thirds.
 // ---------------------------------------------------------------------------
-function ipToNum(s) { const [w, f] = String(s).split('.'); return (+w || 0) + ((+f || 0) / 3); }
-
 async function getQS(id) {
   const key = BV.STORAGE.qsKey(BV.CONFIG.year);
   let map = {};
@@ -270,11 +268,34 @@ async function getQS(id) {
   for (const x of splits) {
     const st = x.stat || {};
     if (+st.gamesStarted !== 1) continue;                          // QS requires the pitcher started
-    if (ipToNum(st.inningsPitched) >= 6 && +st.earnedRuns <= 3) qs++;
+    if (BV.ipToNum(st.inningsPitched) >= 6 && +st.earnedRuns <= 3) qs++;
   }
   map[id] = { qs, ts: Date.now() };
   try { await chrome.storage.local.set({ [key]: map }); } catch (_) {}
   return qs;
+}
+
+// QS + GS per rostered starter for the matchup analyzer, both counted up to `asOf` so the QS rate uses the
+// SAME window as the projection's stat line (a back-test mustn't mix a to-date QS count with an as-of GS
+// denominator). Returns { id: { qs, gs } }. Fetched fresh from the gameLog (asOf varies); failures omitted.
+async function getQSRates(ids, asOf) {
+  const out = {};
+  await Promise.all([...new Set(ids || [])].map(async (id) => {
+    try {
+      const json = JSON.parse(await fetchText(BV.CONFIG.mlbStatsGameLog(id, BV.CONFIG.year)));
+      const splits = (json.stats && json.stats[0] && json.stats[0].splits) || [];
+      let qs = 0, gs = 0;
+      for (const x of splits) {
+        if (asOf && x.date && x.date >= asOf) continue;            // exclude the projected week's own + later starts
+        const st = x.stat || {};
+        if (+st.gamesStarted !== 1) continue;
+        gs++;
+        if (BV.ipToNum(st.inningsPitched) >= 6 && +st.earnedRuns <= 3) qs++;
+      }
+      out[id] = { qs, gs };
+    } catch (_) { /* leave out -> content falls back to no QS for this SP */ }
+  }));
+  return out;
 }
 
 // ---------------------------------------------------------------------------
@@ -312,6 +333,115 @@ async function getSplits(ids) {
   }));
   try { await chrome.storage.local.set({ [key]: map }); } catch (_) {}
   return out;
+}
+
+// ---------------------------------------------------------------------------
+// Matchup analyzer (boxscore page) - weekly category PROJECTION inputs. Five public StatsAPI calls:
+// bulk SEASON + last-30 hitting and pitching component lines (keyed by MLBAM id; the content script joins
+// them to the roster via the hand index's `id`), plus the week's schedule + probable pitchers. The
+// projection MATH lives in core.js (BV.projHit / BV.projStarter / BV.aggOPS); this only fetches + shapes
+// the raw inputs, bottom-up from the CURRENT roster so trades/adds/drops are reflected for free. Season +
+// recent stats cache 12h (year-scoped); schedule/probables cache 3h (window-scoped - they move through
+// the day). Best-effort throughout: a failed feed leaves that input empty, never the whole board.
+// ---------------------------------------------------------------------------
+function ymd(d) { return d.toISOString().slice(0, 10); }
+
+// Sum two component vectors (multi-team season stints share the same numeric keys).
+function sumComp(a, b) { const o = { ...a }; for (const k in b) o[k] = (+o[k] || 0) + (+b[k] || 0); return o; }
+
+// Bulk StatsAPI stats call -> { mlbamId: componentVector }. Sums genuine multi-stint splits and skips the
+// occasional exact-duplicate split (a byDateRange quirk) by (id, team) so a player is never double-counted.
+async function bulkComponents(url, toComp) {
+  const j = JSON.parse(await fetchText(url));
+  const splits = (j.stats && j.stats[0] && j.stats[0].splits) || [];
+  const out = {}, seen = {};
+  for (const s of splits) {
+    const id = s.player && s.player.id;
+    if (id == null) continue;
+    const tid = (s.team && s.team.id) != null ? s.team.id : 'x';
+    const dk = `${id}:${tid}`;
+    if (seen[dk]) continue;                       // exact-duplicate split -> skip (don't double-count)
+    seen[dk] = 1;
+    const c = toComp(s.stat);
+    if (!c) continue;
+    out[id] = out[id] ? sumComp(out[id], c) : c;
+  }
+  return out;
+}
+
+// The week's schedule -> games-per-team + probable-start counts. For the STABLE FULL-WEEK projection we
+// count ALL of a team's games this week (teamGames.total) and how many games each pitcher is the announced
+// probable for (probStarts[id], across the whole window - used to detect a two-start week; a rostered SP
+// defaults to >=1 start regardless). `remaining` (Preview-only) is kept for a future in-week-progress
+// adjustment. Doubleheaders are separate entries, so counting entries (not dates) counts both games.
+async function buildSchedule(start, end, today) {
+  const j = JSON.parse(await fetchText(BV.CONFIG.mlbSchedule(start, end)));
+  const teamGames = {}, probStarts = {};
+  for (const day of (j.dates || [])) {
+    for (const g of (day.games || [])) {
+      if (g.gameType && g.gameType !== 'R') continue;
+      const remaining = BV.isRemainingGame((g.status && g.status.abstractGameState) || '');
+      for (const side of ['home', 'away']) {
+        const t = g.teams && g.teams[side];
+        const id = t && t.team && t.team.id;
+        if (id == null) continue;
+        const tg = teamGames[id] || (teamGames[id] = { total: 0, remaining: 0 });
+        tg.total++;
+        if (remaining) tg.remaining++;
+        const prob = t.probablePitcher;
+        if (prob && prob.id != null) probStarts[prob.id] = (probStarts[prob.id] || 0) + 1;
+      }
+    }
+  }
+  return { teamGames, probStarts };
+}
+
+// `asOf` is the stats CUTOFF date (YYYY-MM-DD): today for the live/current week, or the day before a PAST
+// week started for back-testing. A past week reconstructs the season line "as of" then via byDateRange
+// (so the projection uses only what was knowable going in); the current week keeps the live season bulk +
+// caches it. Past weeks are fetched fresh (not persisted) so a 13-week back-test sweep doesn't bloat storage.
+const addDaysYmd = (s, n) => { const [y, m, d] = s.split('-').map(Number); return new Date(Date.UTC(y, m - 1, d + n)).toISOString().slice(0, 10); };
+
+async function getMatchupData(start, end, asOf) {
+  const Y = BV.CONFIG.year;
+  const todayStr = ymd(new Date());
+  asOf = asOf || todayStr;
+  const isCurrent = asOf >= todayStr;                          // current/future -> live season line + cache
+  const recentStart = addDaysYmd(asOf, -30);
+  const seasonHitUrl = isCurrent ? BV.CONFIG.mlbHitting(Y) : BV.CONFIG.mlbHittingRange(Y, `${Y}-03-01`, asOf);
+  const seasonPitUrl = isCurrent ? BV.CONFIG.mlbPitching(Y) : BV.CONFIG.mlbPitchingRange(Y, `${Y}-03-01`, asOf);
+
+  // 1) Season-as-of + recent-as-of component maps. Current week: 12h cache (year key). Past week: fresh.
+  const sKey = BV.STORAGE.matchupStatsKey(Y);
+  let stats = null;
+  if (isCurrent) { try { const o = await chrome.storage.local.get(sKey); const c = o[sKey]; if (c && (Date.now() - c.ts) < BV.CONFIG.cacheTtlHours * 3600e3) stats = c.v; } catch (_) {} }
+  if (!stats) {
+    const safe = async (p) => { try { return await p; } catch (e) { console.warn(`[Barrel Vision] matchup feed skipped: ${e.message}`); return {}; } };
+    const [batS, batR, pitS, pitR] = await Promise.all([
+      safe(bulkComponents(seasonHitUrl, BV.hitComponents)),
+      safe(bulkComponents(BV.CONFIG.mlbHittingRange(Y, recentStart, asOf), BV.hitComponents)),
+      safe(bulkComponents(seasonPitUrl, BV.pitComponents)),
+      safe(bulkComponents(BV.CONFIG.mlbPitchingRange(Y, recentStart, asOf), BV.pitComponents)),
+    ]);
+    const bat = {}, pit = {};
+    for (const id in batS) (bat[id] = bat[id] || {}).s = batS[id];
+    for (const id in batR) (bat[id] = bat[id] || {}).r = batR[id];
+    for (const id in pitS) (pit[id] = pit[id] || {}).s = pitS[id];
+    for (const id in pitR) (pit[id] = pit[id] || {}).r = pitR[id];
+    stats = { bat, pit };
+    if (isCurrent) { try { await chrome.storage.local.set({ [sKey]: { ts: Date.now(), v: stats } }); } catch (_) {} }
+  }
+  // 2) Schedule + probables for [start..end] (probables = the actual starters for a completed past week).
+  const schedKey = BV.STORAGE.matchupSchedKey(Y);
+  const win = `${start}|${end}`;
+  let sched = null;
+  try { const o = await chrome.storage.local.get(schedKey); const c = o[schedKey]; if (c && c.win === win && (Date.now() - c.ts) < 3 * 3600e3) sched = c.v; } catch (_) {}
+  if (!sched) {
+    try { sched = await buildSchedule(start, end, asOf); }
+    catch (e) { console.warn(`[Barrel Vision] schedule skipped: ${e.message}`); sched = { teamGames: {}, probStarts: {} }; }
+    try { await chrome.storage.local.set({ [schedKey]: { ts: Date.now(), win, v: sched } }); } catch (_) {}
+  }
+  return { bat: stats.bat, pit: stats.pit, teamGames: sched.teamGames, probStarts: sched.probStarts };
 }
 
 // ---------------------------------------------------------------------------
@@ -674,6 +804,18 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
   if (msg.type === 'GET_SPLITS') {
     getSplits(msg.ids)
       .then(splits => sendResponse({ ok: true, splits }))
+      .catch(err => sendResponse({ ok: false, error: err.message }));
+    return true;
+  }
+  if (msg.type === 'GET_MATCHUP_DATA') {
+    getMatchupData(msg.start, msg.end, msg.asOf)
+      .then(data => sendResponse({ ok: true, data }))
+      .catch(err => sendResponse({ ok: false, error: err.message }));
+    return true;
+  }
+  if (msg.type === 'GET_QS_BATCH') {
+    getQSRates(msg.ids, msg.asOf)
+      .then(qs => sendResponse({ ok: true, qs }))
       .catch(err => sendResponse({ ok: false, error: err.message }));
     return true;
   }

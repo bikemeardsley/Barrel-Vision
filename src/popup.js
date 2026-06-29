@@ -174,12 +174,44 @@
     }
   });
 
-  // Master on/off. Writes chrome.storage.sync 'enabled'; the content script (live) and the toolbar
+  // Whole-extension on/off. Writes chrome.storage.sync 'enabled'; the content script (live) and the toolbar
   // right-click menu both listen for this key, so flipping it here updates everywhere at once.
   function setMasterLabel(on) { document.getElementById('bv-master-lab').textContent = on ? 'On' : 'Off'; }
   document.getElementById('bv-enabled').addEventListener('change', e => {
     setMasterLabel(e.target.checked);
     chrome.storage.sync.set({ [BV.STORAGE.enabled]: e.target.checked });
+  });
+
+  // ---------------------------------------------------------------------------
+  // Top-level feature tabs (Advanced Stats / Top-list ranks / Matchup analyzer). Purely client-side: show
+  // the clicked panel, hide the rest. Nothing persists - the popup always opens on the Advanced Stats tab.
+  // ---------------------------------------------------------------------------
+  document.getElementById('bv-tabs').addEventListener('click', e => {
+    const btn = e.target.closest('.bv-tab');
+    if (!btn) return;
+    const panelId = btn.getAttribute('data-panel');
+    for (const t of document.querySelectorAll('.bv-tab')) {
+      const on = t === btn;
+      t.classList.toggle('bv-tab-active', on);
+      t.setAttribute('aria-selected', on ? 'true' : 'false');
+    }
+    for (const p of document.querySelectorAll('.bv-panel')) p.classList.toggle('bv-hidden', p.id !== panelId);
+  });
+
+  // Advanced Stats feature on/off (chrome.storage.sync 'advancedOn'). Turns the injected Savant columns +
+  // ESPN cell highlighting (+ handedness + per-row matchup marks + the player-card Advanced table) on or
+  // off, independent of the whole-extension switch and of the PL / matchup feature toggles. The content
+  // script and the on-page "Show Advanced Stats · Barrel Vision" toggle mirror it live via onChanged.
+  let ADVANCED_ON = true;
+  function applyAdvBody() {
+    const on = ADVANCED_ON !== false;
+    document.getElementById('bv-adv-body').classList.toggle('bv-hidden', !on);
+    document.getElementById('bv-adv-on-lab').textContent = on ? 'On' : 'Off';
+  }
+  document.getElementById('bv-adv-on').addEventListener('change', e => {
+    ADVANCED_ON = e.target.checked;
+    applyAdvBody();
+    chrome.storage.sync.set({ [BV.STORAGE.advancedOn]: ADVANCED_ON });
   });
 
   document.getElementById('bv-debug').addEventListener('change', e => {
@@ -345,17 +377,112 @@
   });
 
   // ---------------------------------------------------------------------------
+  // Matchup analyzer league format - which categories the H2H league scores. Defaults to the standard
+  // 10-cat set (BV.leagueFormatDefault). Saved to chrome.storage.sync; the content script re-projects the
+  // boxscore board live via chrome.storage.onChanged. Phase-2 cats (QS/SV/ERA/WHIP) are still selectable
+  // (they show as live-only in the board) but flagged "soon" so the projection coverage is honest.
+  // ---------------------------------------------------------------------------
+  let LEAGUE_FMT = BV.defaultLeagueFormat();
+  let MX_ON = true;
+  function writeLeagueFormat() { chrome.storage.sync.set({ [BV.STORAGE.leagueFormat]: LEAGUE_FMT }); }
+
+  function renderMxCats() {
+    const wrap = document.getElementById('bv-mx-cats');
+    if (!wrap) return;
+    const sel = new Set(LEAGUE_FMT.cats);
+    const groups = { bat: 'Batting', pit: 'Pitching' };
+    let html = '';
+    for (const g of ['bat', 'pit']) {
+      html += `<div class="bv-mx-grp">${groups[g]}</div><div class="bv-mx-grp-cats">`;
+      for (const key in BV.CONFIG.cats) {
+        const c = BV.CONFIG.cats[key];
+        if (c.group !== g) continue;
+        // Read-only for now: the category set is locked to the tested default league (disabled checkbox).
+        html += `<label class="bv-mx-cat">` +
+          `<input type="checkbox" class="bv-mx-cat-cb" data-cat="${key}" ${sel.has(key) ? 'checked' : ''} disabled>` +
+          `<span>${c.label}</span></label>`;
+      }
+      html += '</div>';
+    }
+    wrap.innerHTML = html;
+  }
+
+  // Scoring note + whether the board is active: the projection only runs for category leagues today.
+  function applyMxScoringNote() {
+    const note = document.getElementById('bv-mx-scoring-note');
+    if (note) note.textContent = LEAGUE_FMT.scoring === 'h2h_categories'
+      ? '' : 'Projections currently support category leagues; points / roto support is planned.';
+  }
+  function applyMxBody() {
+    const on = MX_ON !== false;
+    const body = document.getElementById('bv-mx-body');
+    if (body) body.classList.toggle('bv-hidden', !on);
+    const lab = document.getElementById('bv-mx-on-lab');
+    if (lab) lab.textContent = on ? 'On' : 'Off';
+  }
+
+  document.getElementById('bv-mx-on').addEventListener('change', e => {
+    MX_ON = e.target.checked;
+    applyMxBody();
+    chrome.storage.sync.set({ [BV.STORAGE.matchupOn]: MX_ON });
+  });
+  document.getElementById('bv-mx-scoring').addEventListener('change', e => {
+    LEAGUE_FMT = BV.mergeLeagueFormat({ ...LEAGUE_FMT, scoring: e.target.value });
+    writeLeagueFormat(); applyMxScoringNote();
+    setStatus('Scoring type saved.');
+  });
+  document.getElementById('bv-mx-period').addEventListener('change', e => {
+    const weekly = e.target.value === 'weekly';
+    LEAGUE_FMT = BV.mergeLeagueFormat({ ...LEAGUE_FMT, period: e.target.value, weekStartDow: weekly ? 1 : LEAGUE_FMT.weekStartDow });
+    writeLeagueFormat();
+    setStatus('Timeframe saved.');
+  });
+
+  document.getElementById('bv-mx-cats').addEventListener('change', e => {
+    if (!e.target.classList.contains('bv-mx-cat-cb')) return;
+    const chosen = [];
+    for (const key in BV.CONFIG.cats) {                        // collect checked cats in canonical order
+      const cb = document.querySelector(`.bv-mx-cat-cb[data-cat="${key}"]`);
+      if (cb && cb.checked) chosen.push(key);
+    }
+    if (!chosen.length) { e.target.checked = true; setStatus('Keep at least one category.'); return; }
+    LEAGUE_FMT = BV.mergeLeagueFormat({ ...LEAGUE_FMT, cats: chosen });
+    writeLeagueFormat();
+    setStatus('Matchup categories saved.');
+  });
+
+  // Export the local accuracy log (daily projection snapshots + actuals) to the clipboard as JSON, for
+  // tuning the model after a few weeks. Stored by the content script in chrome.storage.local; no backend.
+  document.getElementById('bv-mx-log-export').addEventListener('click', async () => {
+    try {
+      const KEY = BV.STORAGE.matchupLog(BV.CONFIG.year);
+      const log = (await chrome.storage.local.get(KEY))[KEY] || {};
+      const n = Object.keys(log).length;
+      if (!n) { setStatus('No accuracy log yet — open a matchup boxscore first.'); return; }
+      await navigator.clipboard.writeText(JSON.stringify(log, null, 2));
+      setStatus(`Copied accuracy log (${n} team-weeks) to the clipboard.`);
+    } catch (e) { setStatus('Could not export log: ' + e.message); }
+  });
+
+  // ---------------------------------------------------------------------------
   // Init
   // ---------------------------------------------------------------------------
   (async () => {
     document.getElementById('bv-ver').textContent = 'v' + chrome.runtime.getManifest().version;
     try {
-      const obj = await chrome.storage.sync.get([BV.STORAGE.prefs, BV.STORAGE.plPrefs, BV.STORAGE.debug, BV.STORAGE.enabled, BV.STORAGE.spSource]);
+      const obj = await chrome.storage.sync.get([BV.STORAGE.prefs, BV.STORAGE.plPrefs, BV.STORAGE.debug, BV.STORAGE.enabled, BV.STORAGE.advancedOn, BV.STORAGE.spSource, BV.STORAGE.leagueFormat, BV.STORAGE.matchupOn]);
       PREFS = mergePrefs(obj[BV.STORAGE.prefs]);
+      LEAGUE_FMT = BV.mergeLeagueFormat(obj[BV.STORAGE.leagueFormat]);
+      MX_ON = obj[BV.STORAGE.matchupOn] !== false;             // default on
+      document.getElementById('bv-mx-on').checked = MX_ON;
+      document.getElementById('bv-mx-scoring').value = LEAGUE_FMT.scoring || 'h2h_categories';
+      document.getElementById('bv-mx-period').value = LEAGUE_FMT.period || 'weekly';
       document.getElementById('bv-debug').checked = obj[BV.STORAGE.debug] === true;
       const on = obj[BV.STORAGE.enabled] !== false;            // default on
       document.getElementById('bv-enabled').checked = on;
       setMasterLabel(on);
+      ADVANCED_ON = obj[BV.STORAGE.advancedOn] !== false;      // advanced overlay default on
+      document.getElementById('bv-adv-on').checked = ADVANCED_ON;
       PL_PREFS = BV.mergePlPrefs(obj[BV.STORAGE.plPrefs]);
       document.getElementById('bv-pl-on').checked = PL_PREFS.on !== false;
       document.getElementById('bv-pl-on-sp').checked = PL_PREFS.sp !== false;
@@ -374,7 +501,11 @@
         document.getElementById('bv-pl-hit').value = o.hit || '';
       }
     } catch (_) { /* no override saved */ }
+    applyAdvBody();   // collapse the Advanced Stats table when the advanced overlay is off
     loadPlHealth();   // show the last fetch's per-list rows + freshness (empty until the first fetch)
     render();
+    renderMxCats();   // matchup-analyzer category checklist (locked, read-only, to the default 10-cat league)
+    applyMxBody();
+    applyMxScoringNote();
   })();
 })();

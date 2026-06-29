@@ -29,8 +29,14 @@
   let prevShowSig = '';           // signature of which columns are shown - to detect show-set changes live
   let prevHandSig = '';           // signature of the handedness display toggles - same idea
   let showDebug = false;
-  let ENABLED = true;             // master on/off (chrome.storage.sync 'enabled'); absent = on
+  let ENABLED = true;             // whole-extension master on/off (chrome.storage.sync 'enabled'); absent = on
+  // Advanced Stats overlay on/off (STORAGE.advancedOn; absent = on). Independent of ENABLED: gates the
+  // injected Savant columns, ESPN OPS/ERA/WHIP cell shading, handedness, the per-row matchup symbols, and
+  // the player-card Advanced table/sliders - but NOT the Pitcher List rank badges or the boxscore matchup
+  // analyzer (those are their own features). So ENABLED on + ADVANCED_ON off = vanilla ESPN + PL ranks.
+  let ADVANCED_ON = true;
   let INDEXES = null;              // {bat, pit, hand} from the service worker
+  let LEAGUE_FMT = BV.defaultLeagueFormat();  // matchup-analyzer league config; updated live via onChanged
   let mo = null;
   let scanTimer = null;
 
@@ -272,7 +278,9 @@
     if (!leftTable || !scroller) return;
 
     const kind = tableKind(leftTable);
-    const cols = shownCols(kind);            // only the columns the user has "Show" on for
+    // Advanced overlay off -> inject no Savant columns (and the shading/handedness/matchup blocks below all
+    // gate on ADVANCED_ON too). The Pitcher List rank badge stays - it's a separate feature.
+    const cols = ADVANCED_ON ? shownCols(kind) : [];
     const index = indexes[kind];
     const hand = indexes.hand || {};
     const pl = indexes.pl || {};
@@ -287,18 +295,19 @@
       const p = rowPlayer(tr);
       if (!p) continue;
       players[idx] = p;
-      decorateMatchup(tr, kind, p, indexes, needSplits);   // R/L append + A–F grade, by the OPP
+      if (ADVANCED_ON) decorateMatchup(tr, kind, p, indexes, needSplits);   // R/L append + ▲▼ grade, by the OPP
       const posCell = tr.querySelector('.player-column__position');
       if (posCell) {
-        // Refresh handedness if this row now shows a different player than we last tagged it for
-        // (ESPN reuses row nodes when you sort/filter/paginate, so a stale span would be wrong).
+        // Refresh handedness + PL badge if this row now shows a different player than we last tagged it for
+        // (ESPN reuses row nodes when you sort/filter/paginate, so a stale span would be wrong). Both live
+        // in this one guard; handedness rides ADVANCED_ON, the PL badge rides its own feature toggle.
         const want = BV.normName(p.name);
         if (posCell.dataset.savantHandFor !== want) {
           posCell.querySelector('.savant-hand')?.remove();
           posCell.querySelector('.savant-pl')?.remove();
           const h = hand[BV.normName(p.name)];
           const word = h && BV.handWord(kind === 'pit' ? h.throws : h.bats);
-          if (word && handShown(kind)) {
+          if (word && ADVANCED_ON && handShown(kind)) {
             const span = document.createElement('span');
             span.className = 'savant-hand';
             span.textContent = `• ${word}`;
@@ -315,7 +324,7 @@
     }
     if (needSplits.length) fillSplits(needSplits);          // async: fill the batter-grade placeholders
 
-    hideResearch(scroller);
+    if (ADVANCED_ON) hideResearch(scroller);                // only reclaim ESPN's Research cols when we add ours
 
     // Header: add an "Advanced" group banner + column sub-headers, mirroring ESPN's own header markup.
     // Keyed on a marker class (not a one-time flag) so it self-heals if a re-render strips our cells.
@@ -371,9 +380,11 @@
       tr.dataset.savantName = want;
     }
 
-    // Shade ESPN's existing OPS column on hitter lists; ERA + WHIP on pitcher lists.
-    if (kind === 'bat') shadeListColumn(scroller, 'OPS', 'ops', players);
-    if (kind === 'pit') { shadeListColumn(scroller, 'ERA', 'era', players); shadeListColumn(scroller, 'WHIP', 'whip', players); }
+    // Shade ESPN's existing OPS column on hitter lists; ERA + WHIP on pitcher lists (advanced overlay only).
+    if (ADVANCED_ON) {
+      if (kind === 'bat') shadeListColumn(scroller, 'OPS', 'ops', players);
+      if (kind === 'pit') { shadeListColumn(scroller, 'ERA', 'era', players); shadeListColumn(scroller, 'WHIP', 'whip', players); }
+    }
   }
 
   // Shade an existing ESPN column (found by its header label) using a preference key. Re-applied each
@@ -443,7 +454,7 @@
     const hand = (indexes.hand || {})[BV.normName(name)];
     const plRec = (indexes.pl || {})[BV.normName(name)];
     const teamEl = modal.querySelector('.player-teamname');
-    if (teamEl && hand && handShown(kind) && !teamEl.parentNode.querySelector('.savant-hand')) {
+    if (teamEl && hand && ADVANCED_ON && handShown(kind) && !teamEl.parentNode.querySelector('.savant-hand')) {
       const word = BV.handWord(isPit ? hand.throws : hand.bats);
       if (word) {
         const span = document.createElement('span');
@@ -459,6 +470,10 @@
       const plSpan = plBadge(plRec, true, kind);
       if (plSpan) (teamEl.parentNode.querySelector('.savant-hand') || teamEl).insertAdjacentElement('afterend', plSpan);
     }
+
+    // Advanced overlay off -> we're done after the PL badge: leave ESPN's own columns untouched and add no
+    // Advanced table / sliders. Flag the side so we don't re-run on every mutation (mirrors the on path).
+    if (!ADVANCED_ON) { modal.setAttribute(FLAG, kind); return; }
 
     // Condense ESPN's own columns in place: OBP+SLG -> a single OPS (hitters); W+L -> QS (pitchers).
     const headCells = [...headRow.querySelectorAll('th')];
@@ -891,8 +906,483 @@
     }
   }
 
+  // ===========================================================================
+  // Matchup analyzer (boxscore page only) - extend ESPN's live 2-row category table
+  // with a PROJECTED (weekly final) row per team. Live totals are read straight from
+  // the table; the projection is bottom-up from the CURRENT rosters (DOM) x public
+  // StatsAPI rates (GET_MATCHUP_DATA from the service worker), with the MATH in
+  // core.js. Phase 1 projects R/HR/RBI/SB/OPS and K (from confirmed starts); QS/SV/
+  // ERA/WHIP render live-only ("—" in the proj row) until the start-count / role model
+  // lands. Injection mirrors the Advanced group-banner pattern (decorateBlock) and is
+  // idempotent/self-healing via a content signature. Boxscore only: FantasyCast shows
+  // one roster at a time, so the bottom-up projection needs the boxscore (both rosters).
+  // ===========================================================================
+  let MATCHUP = null;          // { bat:{id:{s,r}}, pit:{id:{s,r}}, teamGames:{tid:{total,remaining}}, probStarts:{pid:[date]}, _win }
+  let matchupReqWin = '';      // window key currently being fetched (dedupe the GET_MATCHUP_DATA)
+  const QS_RATE = {};          // MLBAM id -> season QS count (null = fetch in flight); QS rate = QS / season GS
+  const RP_USAGE = 0.40;       // a rostered reliever appears in ~40% of its team's games this week (rough role estimate)
+  let MATCHUP_ON = true;       // matchup analyzer on/off (STORAGE.matchupOn; absent = on)
+  const MX_WIN = '202,138,4';  // matchup highlight: gold tint on the projected category WINNER's cell only
+  const MX_TEAM_PROJ = {};     // normName(team) -> last projectTeam result; per-team cache for FantasyCast's single-roster view
+  let MX_LOG = null;           // accuracy log (storage.local): daily projection snapshots + actuals, per league+week+team
+  let mxLogLoading = false;    // guard so the async log load fires only once
+  const MX_UP = '#15803d', MX_DOWN = '#c0392b';   // daily projection shift colour: green = improved, red = declined
+
+  function mxYmd(d) { const z = n => String(n).padStart(2, '0'); return `${d.getFullYear()}-${z(d.getMonth() + 1)}-${z(d.getDate())}`; }
+
+  // The configured week window around today, as YYYY-MM-DD (local). weekStartDow: 1 = Monday (Mon-Sun).
+  function mxWeekWindow(fmt) {
+    const dow = Number.isInteger(fmt && fmt.weekStartDow) ? fmt.weekStartDow : 1;
+    const now = new Date(), d = new Date(now.getFullYear(), now.getMonth(), now.getDate());
+    const delta = (d.getDay() - dow + 7) % 7;
+    const start = new Date(d); start.setDate(d.getDate() - delta);
+    const end = new Date(start); end.setDate(start.getDate() + 6);
+    const today = mxYmd(d);
+    return { start: mxYmd(start), end: mxYmd(end), today, key: `${mxYmd(start)}|${mxYmd(end)}|${today}` };
+  }
+
+  const MX_MONTHS = { jan: 0, feb: 1, mar: 2, apr: 3, may: 4, jun: 5, jul: 6, aug: 7, sep: 8, oct: 9, nov: 10, dec: 11 };
+  function mxAddDays(s, n) { const [y, m, d] = s.split('-').map(Number); return mxYmd(new Date(y, m - 1, d + n)); }
+  function mxMonDay(label, year) {
+    const m = (label || '').trim().match(/^([A-Za-z]{3,})\.?\s+(\d{1,2})$/);
+    if (!m) return null;
+    const mi = MX_MONTHS[m[1].toLowerCase().slice(0, 3)], day = +m[2];
+    if (mi == null || !(day >= 1 && day <= 31)) return null;
+    const z = n => String(n).padStart(2, '0');
+    return `${year}-${z(mi + 1)}-${z(day)}`;
+  }
+  // The displayed matchup's week dates from ESPN's day "View" dropdown (options are the 7 day labels +
+  // "Total"). Works on a PAST boxscore too (the page renders that week's context), which is what enables
+  // back-testing. Returns { start, end } YYYY-MM-DD, or null if no such dropdown is present.
+  function mxParseWeekDates() {
+    const year = +(new URLSearchParams(location.search).get('seasonId')) || BV.CONFIG.year;
+    for (const sel of document.querySelectorAll('select')) {
+      const opts = [...(sel.options || [])].map(o => (o.textContent || '').trim());
+      if (!opts.some(o => /^total$/i.test(o))) continue;
+      const dates = opts.map(o => mxMonDay(o, year)).filter(Boolean).sort();
+      if (dates.length >= 2) return { start: dates[0], end: dates[dates.length - 1] };
+    }
+    return null;
+  }
+  // The matchup window to project. Prefer the displayed week's dates (enables PAST-week back-testing); fall
+  // back to today's Mon-Sun. asOf = the stats cutoff: today for the current/future week, else the day before
+  // the week started (so a past projection uses only what was knowable going in). `today` = accuracy-log day.
+  function mxWindow(fmt) {
+    const todayStr = mxYmd(new Date());
+    const parsed = mxParseWeekDates();
+    if (!parsed) { const w = mxWeekWindow(fmt); return { ...w, asOf: w.today, isPast: false }; }
+    const { start, end } = parsed;
+    const isPast = end < todayStr;
+    const asOf = isPast ? mxAddDays(start, -1) : todayStr;
+    const today = isPast ? start : todayStr;
+    return { start, end, today, asOf, isPast, key: `${start}|${end}|${asOf}` };
+  }
+
+  // Fetch the projection inputs for the week (once per window); on success, store + rescan to render.
+  async function ensureMatchupData(win) {
+    if (matchupReqWin === win.key) return;
+    matchupReqWin = win.key;
+    try {
+      const resp = await sendMessage({ type: 'GET_MATCHUP_DATA', start: win.start, end: win.end, asOf: win.asOf });
+      if (resp && resp.ok && resp.data) { MATCHUP = resp.data; MATCHUP._win = win.key; if (INDEXES) scan(INDEXES); }
+      else matchupReqWin = '';                       // failed -> allow a retry on a later scan
+    } catch (_) { matchupReqWin = ''; }
+  }
+
+  // Find ESPN's category table: the one whose header row carries SCORE + most of the league's cat labels
+  // (the per-day box-score batting table has R/HR/RBI/SB/OPS too, but no SCORE column, so SCORE disambiguates).
+  function mxFindCatTable(cats) {
+    const labels = new Set(cats.map(c => c.label.toUpperCase()));
+    const direct = document.querySelector('.matchup-stats-table table');   // ESPN's matchup category table (both pages)
+    const tables = direct ? [direct, ...[...document.querySelectorAll('table')].filter(t => t !== direct)] : [...document.querySelectorAll('table')];
+    for (const table of tables) {
+      let header = [...table.querySelectorAll('thead tr:last-child th, thead tr:last-child td')];
+      if (!header.length) { const r = table.querySelector('tr'); header = r ? [...r.children] : []; }
+      if (!header.length) continue;
+      const texts = header.map(c => (c.textContent || '').trim().toUpperCase());
+      if (!texts.includes('SCORE')) continue;
+      if (texts.filter(t => labels.has(t)).length < Math.min(5, cats.length)) continue;
+      return { table, texts };
+    }
+    return null;
+  }
+
+  // Read the two team rows (names) + map each cat to its column by header text. (The projection is a
+  // full-week total, so live values aren't read here - ESPN's live rows are left untouched.)
+  function mxReadTeams(found, cats) {
+    const { table, texts } = found;
+    const catIdx = {}, scoreIdx = texts.indexOf('SCORE');
+    for (const c of cats) { const i = texts.indexOf(c.label.toUpperCase()); if (i >= 0) catIdx[c.key] = i; }
+    const bodyRows = [...table.querySelectorAll('tbody tr')];
+    const rows = (bodyRows.length ? bodyRows : [...table.querySelectorAll('tr')].slice(1))
+      .filter(tr => !tr.querySelector('th') && tr.children.length >= texts.length && !tr.classList.contains('bv-mx-proj'));
+    const teams = [];
+    for (const tr of rows) {
+      const name = (tr.children[0].textContent || '').trim();
+      if (!name || name.toUpperCase() === 'TEAM') continue;       // skip a header row rendered with <td>
+      if (/^(totals?|bench)$/i.test(name)) continue;
+      const live = {};                                            // live totals (recorded in the accuracy log only)
+      for (const k in catIdx) live[k] = BV.num((tr.children[catIdx[k]].textContent || '').trim());
+      teams.push({ name, live });
+      if (teams.length === 2) break;
+    }
+    return { teams, catIdx, scoreIdx };
+  }
+
+  // Team "<name> Box Score" headings, in document order, used to attribute each roster block to a team.
+  function mxTeamHeadings(teamOrder) {
+    const want = teamOrder.map(t => BV.normName(t)).filter(Boolean);
+    const out = [];
+    for (const el of document.querySelectorAll('div, span, h1, h2, h3, h4, h5, h6')) {
+      const txt = (el.textContent || '').trim();
+      if (txt.length > 50 || !/box score/i.test(txt)) continue;
+      const norm = BV.normName(txt);
+      const idx = want.findIndex(w => norm.includes(w));
+      if (idx >= 0) out.push({ team: teamOrder[idx], el });
+    }
+    return out;
+  }
+  // Nearest preceding team heading for a roster block (headings are in document order).
+  function mxBlockTeam(block, headings) {
+    let team = null;
+    for (const h of headings) if (h.el.compareDocumentPosition(block) & Node.DOCUMENT_POSITION_FOLLOWING) team = h.team;
+    return team;
+  }
+  // Which roster rows count toward the weekly projection, by slot + table kind. IL/NA are always excluded.
+  // Benched HITTERS are excluded - a fair proxy for the daily lineup-slot cap (only ~10 hitters start each
+  // day, whoever they are). Benched PITCHERS are INCLUDED: a rostered starter still takes his turn somewhere
+  // in the week, so dropping the bench would badly undercount K/QS/W/ERA/WHIP. (Tunable - see the accuracy log.)
+  function mxCounts(slot, kind) {
+    if (!slot) return true;                                   // unreadable slot -> include (don't drop a real player)
+    if (/^(il\d*|na)$/i.test(slot)) return false;             // injured / inactive: never
+    if (kind === 'pit') return true;                          // include benched pitchers (they pitch across the week)
+    return !/^(bench|be)$/i.test(slot);                       // hitters: active lineup slots only
+  }
+
+  // FantasyCast shows one team's roster at a time, selected by the active matchup button. Returns the
+  // matched team name (so all roster blocks attribute to it), or null on the boxscore (both rosters present).
+  function mxActiveTeam(teamOrder) {
+    const btn = document.querySelector('.matchup-button.Button--active');
+    if (!btn) return null;
+    const txt = BV.normName((btn.textContent || '').trim());
+    return teamOrder.find(t => BV.normName(t) === txt) || null;
+  }
+
+  // Active rosters by team: { teamName: { bat:[names], pit:[names] } }. On FantasyCast only the displayed
+  // team is present (attributed via the active button); on the boxscore both are, attributed by heading.
+  function mxCollectRosters(teamOrder) {
+    const byTeam = {};
+    for (const t of teamOrder) byTeam[t] = { bat: [], pit: [] };
+    const active = mxActiveTeam(teamOrder);
+    const headings = active ? null : mxTeamHeadings(teamOrder);
+    for (const block of document.querySelectorAll('.ResponsiveTable--fixed-left')) {
+      const team = active || mxBlockTeam(block, headings);
+      if (!team || !byTeam[team]) continue;
+      const left = block.querySelector('table.Table--fixed-left') || block.querySelector('table');
+      if (!left) continue;
+      const kind = tableKind(left);
+      for (const tr of left.querySelectorAll('tbody tr')) {
+        const slot = (tr.querySelector('td, th')?.textContent || '').trim();
+        if (!mxCounts(slot, kind)) continue;
+        // Prefer the athlete cell's title (the FULL name) - ESPN abbreviates some anchors ("P. Crow-Armstrong"),
+        // which wouldn't match StatsAPI's "Pete Crow-Armstrong". Fall back to the (possibly short) anchor text.
+        const athlete = tr.querySelector('.player-column__athlete');
+        const full = athlete && (athlete.getAttribute('title') || '').trim();
+        const p = rowPlayer(tr);
+        const name = full || (p && p.name);
+        if (name) byTeam[team][kind].push(name);
+      }
+    }
+    return byTeam;
+  }
+
+  // Bottom-up projection for one team. Hitting cats project per-game rate x the team's games this week,
+  // scaled by each hitter's playing-time share; pitching uses projected starts/appearances. The math lives
+  // in BV.projectTeam (tested in core).
+  function mxProject(roster, indexes, needQS) {
+    const hand = (indexes && indexes.hand) || {}, pl = (indexes && indexes.pl) || {};
+    const tg = (MATCHUP && MATCHUP.teamGames) || {}, bat = (MATCHUP && MATCHUP.bat) || {},
+          pit = (MATCHUP && MATCHUP.pit) || {}, probStarts = (MATCHUP && MATCHUP.probStarts) || {};
+    // League-max recent games-played (~ a full-timer's share of the schedule). Each hitter's projected games
+    // scale by recent.g / maxRG, so platoon / part-time bats aren't credited a full slate - back-testing
+    // showed R/HR/RBI over-projected ~20-25% from assuming every active hitter plays every team game.
+    let maxRG = 1;
+    for (const id in bat) { const rg = (bat[id].r && +bat[id].r.g) || 0; if (rg > maxRG) maxRG = rg; }
+    const hitters = [], pitchers = [];
+    for (const name of roster.bat) {
+      const r = hand[BV.normName(name)]; if (!r || r.id == null) continue;
+      const comp = bat[r.id]; if (!comp) continue;
+      const g = tg[r.team] || {};
+      const rg = (comp.r && +comp.r.g) || 0;
+      const playRate = rg > 0 ? Math.min(1, rg / maxRG) : 1;        // part-time haircut (calibrated via back-test)
+      hitters.push({ season: comp.s, recent: comp.r, games: (+g.total || 0) * playRate });
+    }
+    for (const name of roster.pit) {
+      const nm = BV.normName(name);
+      const r = hand[nm]; if (!r || r.id == null) continue;
+      const comp = pit[r.id]; if (!comp) continue;
+      const s = comp.s || {};
+      const gs = +s.gs || 0, app = +s.app || 0;
+      const isSP = gs > 0 && gs * 2 >= app;                  // majority of appearances are starts
+      const g = tg[r.team] || {};
+      // full-week starts: a rostered SP makes >=1 start; 2 if probables already show a two-start week.
+      const starts = isSP ? Math.max(1, +probStarts[r.id] || 0) : 0;
+      const apps = isSP ? 0 : Math.round((+g.total || 0) * RP_USAGE * 10) / 10;
+      const isCloser = (+s.sv >= 3) || !!(pl[nm] && pl[nm].rp != null);
+      // QS rate = QS / GS from the SAME gameLog window (both as-of the week) so a back-test isn't skewed by
+      // mixing a to-date QS count with an as-of GS denominator.
+      let qsRate = NaN;
+      if (isSP) {
+        const q = QS_RATE[r.id];
+        if (q && q.gs > 0) qsRate = q.qs / q.gs;
+        else if (q === undefined && needQS) needQS.push(r.id);
+      }
+      pitchers.push({ season: comp.s, recent: comp.r, starts, apps, isSP, isCloser, qsRate });
+    }
+    return BV.projectTeam(hitters, pitchers);                // { count, rate, batG, gs, app } (tested in core)
+  }
+
+  // The full-week projected value for a cat: rate cats from proj.rate, counting from proj.count (SVHD = SV +
+  // HLD), then a per-cat back-test calibration multiplier (CONFIG.cats[].cal, default 1).
+  function mxFinal(cat, proj) {
+    const cal = cat.cal || 1;
+    if (cat.type === 'rate') { const r = proj.rate[cat.key]; return Number.isFinite(r) ? r * cal : NaN; }
+    const v = cat.derive === 'sv+hld' ? (proj.count.SV || 0) + (proj.count.HLD || 0) : proj.count[cat.key];
+    return Number.isFinite(v) ? v * cal : NaN;
+  }
+  function mxFmt(cat, v) {
+    if (!Number.isFinite(v)) return '—';
+    if (cat.type === 'rate') {
+      if (cat.key === 'OPS') return v.toFixed(4).replace(/^0/, '');     // .xxxx - match ESPN's matchup table
+      if (cat.key === 'ERA' || cat.key === 'WHIP') return v.toFixed(3); // x.xxx - match ESPN's matchup table
+      return v.toFixed(3).replace(/^0/, '');                            // AVG / OBP / SLG: .xxx
+    }
+    return String(Math.round(v));
+  }
+  // Win/lose/tie at DISPLAY precision: a cat is a TIE when both teams' rendered values are equal (e.g. SB
+  // 7.13 vs 7.45 both show "7"), so we never highlight a "winner" the user can't see. +1 self wins, -1
+  // loses, 0 tie, null = can't compare (a value missing). dir:'low' cats (ERA/WHIP) invert.
+  function mxCmp(cat, a, b) {
+    if (!Number.isFinite(a) || !Number.isFinite(b)) return null;
+    if (mxFmt(cat, a) === mxFmt(cat, b)) return 0;
+    return (cat.dir === 'low' ? a < b : a > b) ? 1 : -1;
+  }
+  // Projected category record for team i over the modeled cats, as W–L–T (e.g. "6–4–0") to match ESPN.
+  function mxRecord(cats, finals, i) {
+    let w = 0, l = 0, tie = 0;
+    for (const c of cats) {
+      const cmp = mxCmp(c, finals[i][c.key], finals[1 - i][c.key]);
+      if (cmp === null) continue;
+      if (cmp === 0) tie++; else if (cmp > 0) w++; else l++;
+    }
+    return `${w}–${l}–${tie}`;
+  }
+
+  // Highlight the projected WINNER's cell only: a single, fixed semi-light gold shade (distinct from the
+  // advanced columns' red/blue), the loser's cell left plain. No number recolour/bold - the projected rows
+  // otherwise match ESPN's live rows exactly (cells are rebuilt each render, so nothing stale to clear).
+  function paintMatchupCell(td, win) {
+    if (win) td.style.backgroundColor = `rgba(${MX_WIN},0.15)`;
+  }
+
+  function mxClear(table) { table.querySelectorAll('.bv-mx-banner, .bv-mx-proj').forEach(el => el.remove()); delete table.dataset.bvMxSig; }
+  function mxClearRows(table) { table.querySelectorAll('.bv-mx-proj').forEach(el => el.remove()); delete table.dataset.bvMxSig; }
+
+  // The banner row (always present while the analyzer is available): the title with the on/off toggle right
+  // beside it, mirroring the popup's "Matchup analyzer" switch (writes STORAGE.matchupOn). Idempotent.
+  function ensureMxBanner(tbody, colCount) {
+    let banner = tbody.querySelector('.bv-mx-banner');
+    if (!banner) {
+      banner = document.createElement('tr');
+      banner.className = 'Table__TR bv-mx-banner';
+      const th = document.createElement('th');
+      th.colSpan = colCount; th.className = 'Table__TH bv-mx-banner-th';
+      const cell = document.createElement('div'); cell.className = 'table--cell bv-mx-banner-cell';
+      const title = document.createElement('span'); title.className = 'bv-mx-banner-title'; title.textContent = 'Projected weekly total · Barrel Vision';
+      const sw = document.createElement('label'); sw.className = 'savant-switch bv-mx-switch'; sw.title = 'Show matchup projections';
+      const input = document.createElement('input'); input.type = 'checkbox'; input.className = 'bv-mx-toggle-input';
+      const slider = document.createElement('span'); slider.className = 'savant-switch-slider';
+      sw.append(input, slider);
+      input.addEventListener('change', () => chrome.storage.sync.set({ [BV.STORAGE.matchupOn]: input.checked }));
+      cell.append(title, sw);
+      th.appendChild(cell); banner.appendChild(th);
+      tbody.appendChild(banner);
+    }
+    const input = banner.querySelector('.bv-mx-toggle-input'); if (input) input.checked = MATCHUP_ON;
+    return banner;
+  }
+
+  function decorateMatchupTable(indexes) {
+    const fmt = LEAGUE_FMT || BV.defaultLeagueFormat();
+    if (fmt.scoring && fmt.scoring !== 'h2h_categories') return;     // category leagues only for now
+    const cats = BV.catList(fmt);
+    if (!cats.length) return;
+    const found = mxFindCatTable(cats);
+    if (!found) return;
+    const { teams, catIdx, scoreIdx } = mxReadTeams(found, cats);
+    if (teams.length !== 2) { mxClear(found.table); return; }
+
+    const colCount = found.texts.length;
+    const tbody = found.table.querySelector('tbody') || found.table;
+    ensureMxBanner(tbody, colCount);                                // title + toggle, present even when off
+    if (!MATCHUP_ON) { mxClearRows(found.table); return; }
+
+    const win = mxWindow(fmt);                                     // displayed week (past weeks -> back-test)
+    if (!MATCHUP || MATCHUP._win !== win.key) { ensureMatchupData(win); return; }   // fetch, then rescan renders
+    if (MX_LOG === null) loadMxLog();                              // accuracy log: powers shift colours + cross-page fallback
+    const mlog = MX_LOG || {};
+    const leagueId = new URLSearchParams(location.search).get('leagueId') || '';
+
+    // Re-render only when something that moves the projection changes - NOT on live score ticks (it's a
+    // stable full-week total). `active` catches FantasyCast roster toggles; rosterRows catches add/drops.
+    const teamOrder = teams.map(t => t.name);
+    const active = mxActiveTeam(teamOrder);
+    const rosterRows = document.querySelectorAll('.ResponsiveTable--fixed-left tbody tr').length;
+    const sig = `${win.key}~${teamOrder.join('|')}~r${rosterRows}~a${active || ''}~q${Object.keys(QS_RATE).length}~l${MX_LOG ? 1 : 0}`;
+    if (found.table.dataset.bvMxSig === sig && found.table.querySelector('.bv-mx-proj')) return;
+
+    const rosters = mxCollectRosters(teamOrder);
+    const needQS = [];
+    const logged = teams.map(t => mlog[`${leagueId}|${win.start}|${BV.normName(t.name)}`] || null);
+    const finals = teams.map((t, i) => {
+      const nm = BV.normName(t.name);
+      const r = rosters[t.name];
+      if (r && (r.bat.length || r.pit.length)) MX_TEAM_PROJ[nm] = mxProject(r, indexes, needQS);
+      const proj = MX_TEAM_PROJ[nm] || null;                       // this session's in-memory projection
+      const f = {};
+      if (proj) { for (const c of cats) f[c.key] = mxFinal(c, proj); }
+      else {                                                       // not viewed this session -> fall back to the logged projection
+        const lp = mxLatestProj(logged[i]);
+        for (const c of cats) f[c.key] = lp && Number.isFinite(lp[c.key]) ? lp[c.key] : NaN;
+      }
+      return f;
+    });
+
+    mxClearRows(found.table);                                        // leave the banner; rebuild the two proj rows
+    found.table.dataset.bvMxSig = sig;
+
+    teams.forEach((t, i) => {
+      const side = i === 0 ? 'away-team-name' : 'home-team-name';   // mirror ESPN's live row classes exactly
+      const tr = document.createElement('tr');
+      tr.className = 'Table__TR bv-mx-proj';
+      const catByCol = {};
+      for (const c of cats) if (catIdx[c.key] != null) catByCol[catIdx[c.key]] = c;
+      for (let col = 0; col < colCount; col++) {
+        const td = document.createElement('td');
+        const wrap = document.createElement('div');
+        if (col === 0) {                                            // team name - same classes as the live team cell
+          td.className = `pl2 ${side} team-name truncate Table__TD`;
+          wrap.className = `table--cell pl2 ${side} team-name truncate`;
+          wrap.textContent = t.name.trim();
+        } else if (col === scoreIdx) {                             // SCORE stays bold, like the live score cell
+          td.className = 'pl2 fw-bold team-score Table__TD';
+          wrap.className = 'table--cell pl2 fw-bold team-score';
+          wrap.textContent = mxRecord(cats, finals, i);
+        } else if (catByCol[col]) {
+          const cat = catByCol[col];
+          const v = finals[i][cat.key];
+          td.className = 'Table__TD';
+          wrap.className = 'table--cell pl2 pr3 tar';
+          wrap.textContent = mxFmt(cat, v);
+          const shift = mxShiftDir(logged[i], win.today, cat, v);  // daily movement vs the prior-day snapshot
+          if (shift) wrap.style.setProperty('color', shift > 0 ? MX_UP : MX_DOWN, 'important');
+          td.appendChild(wrap);
+          paintMatchupCell(td, mxCmp(cat, v, finals[1 - i][cat.key]) > 0);
+          tr.appendChild(td);
+          continue;
+        } else {
+          td.className = 'Table__TD';
+          wrap.className = 'table--cell pl2 pr3 tar';
+        }
+        td.appendChild(wrap);
+        tr.appendChild(td);
+      }
+      tbody.appendChild(tr);
+    });
+
+    mxLog(leagueId, win.start, win.today, teams, finals, cats);    // record daily snapshot + actuals (local accuracy log)
+    if (needQS.length) fillQS(needQS, win.asOf);                    // async: fetch QS/GS rates as-of, then re-render
+  }
+
+  // Fetch each rostered starter's { qs, gs } counted up to `asOf` (so the QS rate matches the projection's
+  // stat window), then re-render. Marks ids in-flight (null) so we don't refetch on every scan.
+  async function fillQS(ids, asOf) {
+    const need = [...new Set(ids)].filter(id => QS_RATE[id] === undefined);
+    if (!need.length) return;
+    need.forEach(id => { QS_RATE[id] = null; });
+    let resp; try { resp = await sendMessage({ type: 'GET_QS_BATCH', ids: need, asOf }); } catch (_) { return; }
+    if (!resp || !resp.ok || !resp.qs) return;
+    for (const id in resp.qs) QS_RATE[id] = resp.qs[id];           // { qs, gs }
+    if (ENABLED && MATCHUP_ON && INDEXES) {
+      document.querySelectorAll('[data-bv-mx-sig]').forEach(el => { delete el.dataset.bvMxSig; });   // force re-render
+      scan(INDEXES);
+    }
+  }
+
+  // ---------------------------------------------------------------------------
+  // Accuracy log (chrome.storage.local, no backend). Per league+week+team it stores a DAILY projection
+  // snapshot (projByDay) + the latest LIVE actual. Drives the green/red daily shift colour, lets us measure
+  // projection error vs actuals over a few weeks to tune the model, and doubles as a cross-page cache so a
+  // projection made on the boxscore shows on FantasyCast (where only one roster is in the DOM at a time).
+  // ---------------------------------------------------------------------------
+  function mxLogKey() { return BV.STORAGE.matchupLog(BV.CONFIG.year); }
+
+  async function loadMxLog() {
+    if (MX_LOG !== null || mxLogLoading) return;
+    mxLogLoading = true;
+    let stored = {};
+    try { const o = await chrome.storage.local.get(mxLogKey()); stored = o[mxLogKey()] || {}; } catch (_) {}
+    MX_LOG = stored; mxLogLoading = false;
+    if (ENABLED && MATCHUP_ON && INDEXES) {                         // re-render now that the log (shift/fallback) is in
+      document.querySelectorAll('[data-bv-mx-sig]').forEach(el => { delete el.dataset.bvMxSig; });
+      scan(INDEXES);
+    }
+  }
+
+  // The most recent day's projection snapshot in a log record (the cross-page fallback projection).
+  function mxLatestProj(rec) {
+    if (!rec || !rec.projByDay) return null;
+    const days = Object.keys(rec.projByDay).sort();
+    return days.length ? rec.projByDay[days[days.length - 1]] : null;
+  }
+
+  // Daily shift: today's projected value vs the latest PRIOR day's snapshot. +1 = improved (green), -1 =
+  // declined (red), 0 = no prior snapshot / no visible change. Direction respects the cat (ERA/WHIP low = good).
+  function mxShiftDir(rec, today, cat, current) {
+    if (!rec || !rec.projByDay || !Number.isFinite(current)) return 0;
+    const days = Object.keys(rec.projByDay).filter(d => d < today).sort();
+    if (!days.length) return 0;
+    const prev = rec.projByDay[days[days.length - 1]][cat.key];
+    if (!Number.isFinite(prev) || mxFmt(cat, prev) === mxFmt(cat, current)) return 0;
+    return (cat.dir === 'low' ? current < prev : current > prev) ? 1 : -1;
+  }
+
+  // Record this render: today's projection snapshot per team + the latest live actual. Snapshot is keyed by
+  // DAY (overwritten with the latest within a day) so tomorrow can show the shift; the actual converges to
+  // the week's final as the games complete. Writes only when something changed.
+  async function mxLog(leagueId, week, today, teams, finals, cats) {
+    if (MX_LOG === null) return;
+    let changed = false;
+    teams.forEach((t, i) => {
+      const snap = {}, actual = {};
+      for (const c of cats) {
+        const v = finals[i][c.key];
+        if (Number.isFinite(v)) snap[c.key] = Math.round(v * 1000) / 1000;
+        if (t.live && Number.isFinite(t.live[c.key])) actual[c.key] = t.live[c.key];
+      }
+      const k = `${leagueId}|${week}|${BV.normName(t.name)}`;
+      const prev = MX_LOG[k] || { projByDay: {} };
+      const projByDay = { ...prev.projByDay };
+      if (Object.keys(snap).length) projByDay[today] = snap;       // latest snapshot for today
+      const rec = { team: t.name.trim(), week, projByDay, actual, actualTs: Date.now() };
+      if (JSON.stringify(MX_LOG[k]) !== JSON.stringify(rec)) { MX_LOG[k] = rec; changed = true; }
+    });
+    if (changed) { try { await chrome.storage.local.set({ [mxLogKey()]: MX_LOG }); } catch (_) {} }
+  }
+
   // Disconnect the observer while we mutate, so our own appends don't re-trigger a scan (feedback loop).
   function scan(indexes) {
+    if (!ENABLED) return;            // off is strictly idle - guards deferred callers (matchup fetch / QS fill)
     if (mo) mo.disconnect();
     try {
       STATS.found = 0; STATS.matched = 0;                 // recount the current view from scratch each scan
@@ -904,6 +1394,9 @@
         }
       }
       try { decorateModal(indexes); } catch (_) { /* modal is optional */ }
+      if (/\/baseball\/(boxscore|fantasycast)/i.test(location.pathname)) {
+        try { decorateMatchupTable(indexes); } catch (_) { /* matchup analyzer is optional */ }
+      }
     } finally {
       updateHud();                                                  // write the HUD while still disconnected
       if (mo) mo.observe(document.body, { childList: true, subtree: true }); // then resume observing
@@ -950,13 +1443,16 @@
 
   async function loadState() {
     try {
-      const obj = await chrome.storage.sync.get([BV.STORAGE.prefs, BV.STORAGE.plPrefs, BV.STORAGE.debug, BV.STORAGE.enabled]);
+      const obj = await chrome.storage.sync.get([BV.STORAGE.prefs, BV.STORAGE.plPrefs, BV.STORAGE.debug, BV.STORAGE.enabled, BV.STORAGE.advancedOn, BV.STORAGE.leagueFormat, BV.STORAGE.matchupOn]);
       PREFS = mergePrefs(obj[BV.STORAGE.prefs]);
       PL_PREFS = BV.mergePlPrefs(obj[BV.STORAGE.plPrefs]);
+      LEAGUE_FMT = BV.mergeLeagueFormat(obj[BV.STORAGE.leagueFormat]);
+      MATCHUP_ON = obj[BV.STORAGE.matchupOn] !== false;     // default on
       prevShowSig = showSig(PREFS);
       prevHandSig = handSig(PREFS);
       showDebug = obj[BV.STORAGE.debug] === true;
       ENABLED = obj[BV.STORAGE.enabled] !== false;     // default on (absent / true), off only if explicitly false
+      ADVANCED_ON = obj[BV.STORAGE.advancedOn] !== false;   // advanced overlay default on; off only if explicitly false
     } catch (_) { /* defaults already set */ }
   }
 
@@ -987,11 +1483,42 @@
   // work while off - off is strictly lighter than on, not heavier.
   // ---------------------------------------------------------------------------
   function teardown() {
-    document.querySelectorAll('.savant-col, .savant-col-th, .savant-adv-group, .savant-hand, .savant-pl, .savant-adv, .savant-sliders, .savant-mu')
+    document.querySelectorAll('.savant-col, .savant-col-th, .savant-adv-group, .savant-hand, .savant-pl, .savant-adv, .savant-sliders, .savant-mu, .bv-mx-banner, .bv-mx-proj')
       .forEach(el => el.remove());
+    document.querySelectorAll('[data-bv-mx-sig]').forEach(el => { delete el.dataset.bvMxSig; });
+    MATCHUP = null; matchupReqWin = '';        // re-arm the matchup fetch so re-enable rebuilds cleanly
     document.querySelectorAll('.savant-hidden').forEach(el => el.classList.remove('savant-hidden'));
     for (const td of document.querySelectorAll('td[data-savant-key]')) {     // ESPN's own shaded cells
       clearShade(td);                                                        // inline bg + bubble class/props
+      delete td.dataset.savantKey;
+      delete td.dataset.savantVal;
+    }
+    document.querySelectorAll('[data-savant-name]').forEach(el => { delete el.dataset.savantName; });
+    document.querySelectorAll('[data-savant-hand-for]').forEach(el => { delete el.dataset.savantHandFor; });
+    document.querySelectorAll('[data-savant-mu-for]').forEach(el => { delete el.dataset.savantMuFor; });
+    document.querySelectorAll('a.savant-oppl').forEach(a => {                 // revert "(Drohan • L)" -> "(Drohan)"
+      a.textContent = (a.textContent || '').replace(/\(\s*([^)]*?)\s*[•·]\s*[LRS]\)/, '($1)');
+      a.classList.remove('savant-oppl');
+    });
+  }
+
+  // Tear down ONLY the Advanced Stats overlay (live ADVANCED_ON flip), leaving the Pitcher List rank
+  // badges and the boxscore matchup analyzer in place. It's teardown() minus `.savant-pl` and the matchup
+  // board: remove our columns / handedness / per-row matchup symbols / modal Advanced table+sliders,
+  // un-hide the ESPN columns we collapsed, and clear the shading we painted on ESPN's OPS/ERA/WHIP cells.
+  // Clearing the per-row markers (savant-name / hand-for / mu-for) makes the next scan rebuild from a clean
+  // slate - the hand-for guard then re-renders the PL badge (kept) without handedness (gone). An open
+  // player-card modal keeps its FLAG, so it self-heals on reopen (same one-shot-relabel caveat as teardown).
+  function teardownAdvanced() {
+    document.querySelectorAll('.savant-col, .savant-col-th, .savant-adv-group, .savant-hand, .savant-adv, .savant-sliders, .savant-mu')
+      .forEach(el => el.remove());
+    // Un-hide the ESPN columns we collapsed in the ROSTER, but leave the open player-card modal's hidden
+    // cells (SLG / L) alone: its OPS/QS condense overwrote ESPN's own cells in place (not reversible here),
+    // so re-showing SLG/L would leave a mislabeled "OPS" column duplicated beside a re-shown SLG. The modal
+    // keeps its condensed view (minus our Advanced table) and fully self-heals when ESPN re-renders it on reopen.
+    document.querySelectorAll('.savant-hidden').forEach(el => { if (!el.closest('.player-card-modal')) el.classList.remove('savant-hidden'); });
+    for (const td of document.querySelectorAll('td[data-savant-key]')) {     // ESPN's own shaded cells (ours are removed above)
+      clearShade(td);
       delete td.dataset.savantKey;
       delete td.dataset.savantVal;
     }
@@ -1029,11 +1556,18 @@
   // ---------------------------------------------------------------------------
   chrome.storage.onChanged.addListener((changes, area) => {
     if (area === 'sync') {
-      if (changes[BV.STORAGE.enabled]) {                          // master switch flipped (popup, page toggle or icon menu)
+      if (changes[BV.STORAGE.enabled]) {                          // whole-extension switch flipped (popup or icon menu)
         ENABLED = changes[BV.STORAGE.enabled].newValue !== false;
         if (ENABLED) start(); else stop();
-        syncMasterToggle();                                       // mirror the new state on the on-page toggle
+        ensureMasterToggle();                                     // add the on-page toggle when on, remove it when off
         return;                                                   // start()/stop() handle the overlay itself
+      }
+      if (changes[BV.STORAGE.advancedOn]) {                       // Advanced Stats overlay flipped (popup tab or page toggle)
+        ADVANCED_ON = changes[BV.STORAGE.advancedOn].newValue !== false;
+        teardownAdvanced();                                       // strip the advanced overlay; keep PL ranks + matchup board
+        syncMasterToggle();                                       // mirror the new state on the on-page "Show Advanced Stats" toggle
+        if (INDEXES) scan(INDEXES);                               // rebuild: PL badges always, advanced overlay only if now on
+        return;
       }
       if (changes[BV.STORAGE.prefs]) {
         PREFS = mergePrefs(changes[BV.STORAGE.prefs].newValue);
@@ -1052,6 +1586,18 @@
         PL_PREFS = BV.mergePlPrefs(changes[BV.STORAGE.plPrefs].newValue);
         clearHandMarkers();
         if (INDEXES) scan(INDEXES);
+      }
+      if (changes[BV.STORAGE.leagueFormat]) {     // matchup league config (cats/week) changed -> re-project
+        LEAGUE_FMT = BV.mergeLeagueFormat(changes[BV.STORAGE.leagueFormat].newValue);
+        MATCHUP = null; matchupReqWin = '';       // window/cats may have moved -> refetch + rebuild the board
+        document.querySelectorAll('.bv-mx-banner, .bv-mx-proj').forEach(el => el.remove());
+        document.querySelectorAll('[data-bv-mx-sig]').forEach(el => { delete el.dataset.bvMxSig; });
+        if (INDEXES) scan(INDEXES);
+      }
+      if (changes[BV.STORAGE.matchupOn]) {        // matchup analyzer on/off (popup or on-page banner toggle)
+        MATCHUP_ON = changes[BV.STORAGE.matchupOn].newValue !== false;
+        document.querySelectorAll('[data-bv-mx-sig]').forEach(el => { delete el.dataset.bvMxSig; });
+        if (INDEXES) scan(INDEXES);               // re-render: hides/shows the proj rows (banner stays)
       }
       if (changes[BV.STORAGE.debug]) { showDebug = changes[BV.STORAGE.debug].newValue === true; updateHud(); }
     } else if (area === 'local') {
@@ -1110,19 +1656,22 @@
   }
 
   // ---------------------------------------------------------------------------
-  // On-page master toggle ("Show Advanced Stats") - a second face of the popup's
-  // master switch, on the Stats-tab toolbar (team / Free Agents / watchlist pages),
-  // just LEFT of ESPN's own season-stats caption ("Show Stats" / "Stats"), whose
-  // font we copy so the two read as one control. It writes the SAME
-  // chrome.storage.sync 'enabled' key, so flipping it - or the popup, or the toolbar
-  // menu - all converge: storage.onChanged fans the new state back out to every
-  // surface (incl. this toggle, via syncMasterToggle).
+  // On-page Advanced Stats toggle ("Show Advanced Stats · Barrel Vision") - a second
+  // face of the popup's Advanced Stats tab switch, on the Stats-tab toolbar (team /
+  // Free Agents / watchlist pages), just LEFT of ESPN's own season-stats caption
+  // ("Show Stats" / "Stats"), whose font we copy so the two read as one control. It
+  // writes chrome.storage.sync 'advancedOn' (the advanced-overlay feature switch, NOT
+  // the whole-extension 'enabled'), so flipping it - or the popup tab - converge:
+  // storage.onChanged fans the new state back out to every surface (incl. this toggle,
+  // via syncMasterToggle).
   //
-  // It is maintained by its OWN always-on observer (pageMo), independent of the
-  // overlay's start()/stop() lifecycle - the whole point is to offer an ON switch
-  // while the overlay is OFF, so it must render even when start() never runs. It
-  // does no fetching and wakes no service worker (purely a DOM control), so "off"
-  // stays light. teardown() leaves it alone (its classes aren't in teardown's set).
+  // It is maintained by its OWN observer (pageMo), independent of the overlay's
+  // start()/stop() lifecycle, so it can render the advanced overlay back ON while that
+  // overlay is OFF. It is shown only while the WHOLE extension is enabled - when the
+  // extension is off there is no on-page Barrel Vision UI at all (the kill switch lives
+  // in the popup header + toolbar menu), so ensureToolbarToggle removes it when !ENABLED.
+  // It does no fetching and wakes no service worker (purely a DOM control), so "off"
+  // stays light. teardown()/teardownAdvanced() leave it alone (its classes aren't theirs).
   // ---------------------------------------------------------------------------
   let pageMo = null, pageToggleTimer = null;
 
@@ -1185,29 +1734,29 @@
     wrap.title = 'Show Barrel Vision advanced stats';
     const lab = document.createElement('span');
     lab.className = 'savant-page-toggle-lab';
-    lab.textContent = 'Show Advanced Stats';
+    lab.textContent = 'Show Advanced Stats · Barrel Vision';
     const sw = document.createElement('span');
     sw.className = 'savant-switch';
     const input = document.createElement('input');
     input.type = 'checkbox';
     input.className = 'savant-page-toggle-input';
-    input.checked = ENABLED;
+    input.checked = ADVANCED_ON;
     const slider = document.createElement('span');
     slider.className = 'savant-switch-slider';
     sw.append(input, slider);
     wrap.append(lab, sw);
     // Write-only: don't flip the overlay here. storage.onChanged is the single path that reacts to
-    // 'enabled' (start()/stop() + syncMasterToggle), so the popup, menu and page all take the same route.
+    // 'advancedOn' (teardownAdvanced + rescan + syncMasterToggle), so the popup tab and page take one route.
     input.addEventListener('change', () => {
-      chrome.storage.sync.set({ [BV.STORAGE.enabled]: input.checked });
+      chrome.storage.sync.set({ [BV.STORAGE.advancedOn]: input.checked });
     });
     return wrap;
   }
 
-  // Reflect the current ENABLED state onto EVERY on-page toggle (toolbar + modal), whatever surface changed
-  // it. No-op when none are on the page yet.
+  // Reflect the current ADVANCED_ON state onto EVERY on-page Advanced Stats toggle, whatever surface
+  // changed it. No-op when none are on the page yet.
   function syncMasterToggle() {
-    for (const input of document.querySelectorAll('.savant-page-toggle-input')) input.checked = ENABLED;
+    for (const input of document.querySelectorAll('.savant-page-toggle-input')) input.checked = ADVANCED_ON;
   }
 
   // Stats-tab TOOLBAR toggle (team / Free Agents / watchlist), placed left of ESPN's season-stats caption.
@@ -1216,6 +1765,7 @@
   // document-wide scan), so ESPN's constant live-score mutations stay cheap and we don't churn the DOM.
   function ensureToolbarToggle() {
     const existing = document.querySelector('.savant-page-toggle--toolbar');
+    if (!ENABLED) { if (existing) existing.remove(); return; }              // extension off -> no on-page UI at all
     if (!onStatsView()) { if (existing) existing.remove(); return; }       // non-Stats view -> never show
     if (existing && existing.isConnected) {
       const sib = existing.nextElementSibling;
@@ -1230,9 +1780,9 @@
     applyCaptionFont(toggle, caption);                                    // match ESPN's "Show Stats" / "Stats" font
   }
 
-  // Maintain the toolbar toggle for the current DOM, then sync it to ENABLED. ESPN re-renders the toolbar
-  // on tab changes, so ensureToolbarToggle re-anchors if our node drifted and self-heals if React dropped
-  // it - the next mutation re-runs this.
+  // Maintain the toolbar toggle for the current DOM, then sync it to ADVANCED_ON. ESPN re-renders the
+  // toolbar on tab changes, so ensureToolbarToggle re-anchors if our node drifted and self-heals if React
+  // dropped it - the next mutation re-runs this. (ensureToolbarToggle removes it entirely when !ENABLED.)
   function ensureMasterToggle() {
     ensureToolbarToggle();
     syncMasterToggle();
@@ -1246,10 +1796,11 @@
     }, BV.CONFIG.scanDebounceMs);
   }
 
-  // Always-on (independent of ENABLED), so the toggle renders - and can turn the overlay back ON - even
-  // while the overlay is off. Idempotent: a second call just keeps the single observer. The MutationObserver
-  // catches ESPN's SPA re-renders (tab switches re-render the toolbar); popstate covers browser back/forward
-  // between tabs, where the URL view changes without a DOM burst of its own.
+  // Always observing (independent of the overlay's start()/stop()), so the toggle renders - and can turn the
+  // advanced overlay back ON - even while that overlay is off. (It still hides when the WHOLE extension is
+  // off; ensureToolbarToggle gates on ENABLED.) Idempotent: a second call just keeps the single observer.
+  // The MutationObserver catches ESPN's SPA re-renders (tab switches re-render the toolbar); popstate covers
+  // browser back/forward between tabs, where the URL view changes without a DOM burst of its own.
   function startPageToggleObserver() {
     try { ensureMasterToggle(); } catch (_) { /* toolbar not up yet; pageMo will catch it */ }
     if (pageMo) return;

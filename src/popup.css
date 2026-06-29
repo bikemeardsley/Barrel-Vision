@@ -34,6 +34,35 @@ body {
 
 .bv-note { margin: 12px 16px; color: #555; font-size: 12px; }
 
+/* ---------------------------------------------------------------------------
+   Top-level feature tabs (Advanced Stats / Top-list ranks / Matchup analyzer).
+   One .bv-panel per tab; popup.js shows the active one and hides the rest via
+   .bv-hidden. The tab bar's bottom border is the only divider under the tabs,
+   so the panel sections drop their own top border (see overrides below).
+   --------------------------------------------------------------------------- */
+.bv-tabs { display: flex; gap: 2px; padding: 0 8px; border-bottom: 1px solid #e6e6e6; }
+.bv-tab {
+  appearance: none; background: none; border: none; border-bottom: 2px solid transparent;
+  margin-bottom: -1px;                       /* sit the active underline on the bar's border */
+  padding: 9px 11px; font: inherit; font-size: 12px; font-weight: 600;
+  color: #888; cursor: pointer; white-space: nowrap;
+}
+.bv-tab:hover { color: #555; }
+.bv-tab-active { color: #d62e2e; border-bottom-color: #d62e2e; }
+.bv-tab:focus-visible { outline: 2px solid rgba(214, 46, 46, .4); outline-offset: -2px; border-radius: 4px; }
+
+.bv-hidden { display: none; }               /* hidden tab panels + collapsed feature bodies */
+/* Inside a panel the section provides its own padding; the tab bar already separates it, so kill the
+   section's top border (Top-list ranks / Matchup analyzer carry one for the old single-scroll layout). */
+.bv-panel > .bv-pl, .bv-panel > .bv-mx-sec { border-top: none; }
+
+/* Advanced Stats tab header: title + the advanced-overlay on/off toggle (chrome.storage.sync
+   'advancedOn'), mirroring the other tabs' feature switches. The body collapses when off. */
+.bv-adv-head { display: flex; align-items: center; gap: 8px; padding: 12px 16px 0; }
+.bv-adv-title { font-weight: 700; font-size: 14px; }
+.bv-adv-head .bv-master { margin-left: auto; }   /* toggle to the header's right */
+.bv-adv-body.bv-hidden { display: none; }
+
 .bv-table { width: 100%; border-collapse: collapse; }
 .bv-table th, .bv-table td { padding: 6px 10px; text-align: left; border-bottom: 1px solid #f0f0f0; }
 .bv-table th { font-size: 11px; text-transform: uppercase; letter-spacing: .4px; color: #888; }
@@ -71,12 +100,11 @@ input[type="checkbox"] { width: 15px; height: 15px; cursor: pointer; accent-colo
 .bv-switch input[type="checkbox"]:disabled + .bv-slider { opacity: .5; cursor: default; }
 .bv-switch:has(input:disabled) { cursor: default; }
 
+/* Advanced Stats tab footer: Reset + Refresh, grouped to the right beneath the table. */
 .bv-foot {
-  display: flex; justify-content: space-between; align-items: center; gap: 10px;
+  display: flex; justify-content: flex-end; align-items: center; gap: 8px;
   padding: 12px 16px; border-top: 1px solid #e6e6e6;
 }
-.bv-debug-toggle { display: flex; align-items: center; gap: 6px; font-size: 12px; color: #555; cursor: pointer; }
-.bv-foot-btns { display: flex; gap: 8px; }
 .bv-foot button {
   padding: 7px 12px; border-radius: 6px; border: 1px solid #ccc; cursor: pointer; font-size: 12px;
   background: #fff; color: #333;
@@ -85,7 +113,11 @@ input[type="checkbox"] { width: 15px; height: 15px; cursor: pointer; accent-colo
 /* Refresh uses the same neutral style as Reset (inherits .bv-foot button). */
 #bv-refresh:disabled { opacity: .6; cursor: default; }
 
-.bv-status { padding: 0 16px 12px; min-height: 16px; color: #4a7; font-size: 12px; }
+/* Global footer (shared across tabs): the debug-readout toggle covers all three features' HUD. */
+.bv-globalfoot { padding: 10px 16px; border-top: 1px solid #e6e6e6; }
+.bv-debug-toggle { display: flex; align-items: center; gap: 6px; font-size: 12px; color: #555; cursor: pointer; }
+
+.bv-status { padding: 8px 16px 12px; min-height: 16px; color: #4a7; font-size: 12px; }
 
 /* Pitcher List ranks section: a header with a master toggle; the body (per-list toggles + override)
    shows only when the master is on. */
@@ -125,3 +157,36 @@ input[type="checkbox"] { width: 15px; height: 15px; cursor: pointer; accent-colo
 }
 .bv-pl-fetchrow button:hover, .bv-pl-btns button:hover { background: #f6f6f6; }
 .bv-pl-fetchrow button:disabled, .bv-pl-btns button:disabled { opacity: .6; cursor: default; }
+
+/* ---------------------------------------------------------------------------
+   Matchup analyzer - league-format (category) picker. Mirrors the Top-list ranks
+   section's framing; the boxscore content script reads STORAGE.leagueFormat.
+   --------------------------------------------------------------------------- */
+.bv-mx-sec { padding: 12px 16px; border-top: 1px solid #e6e6e6; }
+.bv-mx-sec-head { display: flex; align-items: center; gap: 8px; }
+.bv-mx-sec-title { font-weight: 700; font-size: 14px; }
+.bv-mx-sec-tag { font-size: 11px; color: #999; text-transform: uppercase; letter-spacing: .4px; }
+.bv-mx-master { margin-left: auto; }                       /* on/off toggle to the section header's right */
+.bv-mx-body.bv-hidden { display: none; }
+.bv-mx-sec-note { margin: 6px 0 10px; color: #565b61; font-size: 12px; }
+.bv-mx-win-key { color: #b8860b; font-weight: 700; }   /* gold = winner-highlight theme */
+
+.bv-mx-opts { display: flex; gap: 14px; flex-wrap: wrap; margin: 8px 0 10px; }
+.bv-mx-opt { display: flex; flex-direction: column; gap: 3px; font-size: 11px; font-weight: 700; color: #888; text-transform: uppercase; letter-spacing: .4px; }
+.bv-mx-opt select { font: inherit; text-transform: none; font-weight: 400; color: #1d1f23; padding: 4px 6px; border: 1px solid #cfd2d6; border-radius: 6px; }
+.bv-mx-cats-lab { font-size: 11px; font-weight: 700; color: #888; text-transform: uppercase; letter-spacing: .4px; margin-bottom: 6px; }
+.bv-mx-foot-note { color: #b9802a; font-size: 12px; margin: 8px 0 0; }
+/* Read-only (beta) note: scoring/timeframe/categories are locked to the tested default league for now. */
+.bv-mx-lock-note { color: #565b61; font-size: 11px; font-style: italic; line-height: 1.4; margin: 10px 0 0; }
+/* Locked controls: greyed + not-interactive, but still legible so the chosen defaults read clearly. */
+.bv-mx-opt select:disabled { background: #f0f0f0; color: #777; cursor: not-allowed; opacity: 1; }
+.bv-mx-cat input:disabled { cursor: not-allowed; }
+.bv-mx-cat:has(input:disabled) { cursor: default; }
+
+.bv-mx-cats { display: flex; flex-direction: column; gap: 6px; }
+.bv-mx-grp { font-size: 11px; font-weight: 700; color: #888; text-transform: uppercase; letter-spacing: .4px; }
+.bv-mx-grp-cats { display: flex; flex-wrap: wrap; gap: 6px 14px; margin-bottom: 4px; }
+.bv-mx-cat { display: inline-flex; align-items: center; gap: 5px; cursor: pointer; font-size: 13px; }
+.bv-mx-cat input { margin: 0; accent-color: #d62e2e; cursor: pointer; }
+.bv-mx-logrow { display: flex; align-items: center; gap: 10px; margin-top: 12px; }
+.bv-mx-log-note { font-size: 11px; color: #888; }

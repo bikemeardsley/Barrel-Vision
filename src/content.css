@@ -110,3 +110,18 @@ td:has(.savant-mu) { overflow: visible; min-width: 80px; }
 .savant-switch input[type="checkbox"]:checked + .savant-switch-slider { background: #d62e2e; }   /* app red when on */
 .savant-switch input[type="checkbox"]:checked + .savant-switch-slider::before { transform: translateX(14px); }
 .savant-switch input[type="checkbox"]:focus-visible + .savant-switch-slider { box-shadow: 0 0 0 2px rgba(214, 46, 46, .4); }
+
+/* ---------------------------------------------------------------------------
+   Matchup analyzer (boxscore + FantasyCast) - the injected "Projected weekly
+   total" rows beneath ESPN's live category table. The live rows are left
+   untouched; these rows carry a stable full-week projection, with only the
+   projected WINNER's cell highlighted in GOLD by paintMatchupCell (distinct from
+   the advanced columns' red/blue). The banner carries the title + on/off toggle.
+   --------------------------------------------------------------------------- */
+.bv-mx-banner-th { background: #f4f5f7; border-top: 2px solid #ca8a04; }   /* gold = matchup theme */
+.bv-mx-banner-cell { display: flex; align-items: center; gap: 8px; padding: 4px 8px; }
+.bv-mx-banner-title { font-size: 11px; font-weight: 700; letter-spacing: .03em; text-transform: uppercase; color: #6c727a; }
+.bv-mx-switch { flex: none; }                              /* on/off toggle sits right beside the title */
+/* The projected rows deliberately carry NO extra styling - they reuse ESPN's own live-row cell classes
+   (team-name / fw-bold team-score / tar) so font, colour, size and alignment match the live rows exactly.
+   The only paint is the single semi-light gold winner-highlight applied inline by paintMatchupCell. */

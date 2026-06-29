@@ -10,8 +10,9 @@
   <div class="bv-head">
     <span class="bv-title">Barrel Vision</span>
     <span class="bv-ver" id="bv-ver"></span>
-    <!-- Master on/off. Flips chrome.storage.sync 'enabled'; the content script tears the overlay down /
-         back up live (no reload), and the toolbar right-click menu mirrors the same switch. -->
+    <!-- Whole-extension on/off. Flips chrome.storage.sync 'enabled'; the content script tears the overlay
+         down / back up live (no reload), and the toolbar right-click menu mirrors the same switch. This is
+         the kill switch for all three features; each feature also has its own toggle on its tab. -->
     <span class="bv-master" title="Turn Barrel Vision on or off">
       <span class="bv-master-lab" id="bv-master-lab">On</span>
       <label class="bv-switch">
@@ -25,82 +26,173 @@
     </a>
   </div>
 
-  <p class="bv-note">
-    Red = better than your threshold, blue = worse, stronger mark = further away.
-    <b>Show</b> adds or removes the column; <b>Highlight</b> toggles its colouring (the value is kept).
-    Values compare in the units shown in each column (SqUp% in %, xwOBA as .xxx). Changes apply live.
-  </p>
-
-  <table class="bv-table" id="bv-table">
-    <thead>
-      <tr><th>Column</th><th>Show</th><th>Threshold</th><th>Highlight</th><th>Direction</th></tr>
-    </thead>
-    <tbody id="bv-tbody"><!-- rows built in popup.js --></tbody>
-  </table>
-
-  <div class="bv-foot">
-    <label class="bv-debug-toggle"><span class="bv-switch"><input type="checkbox" id="bv-debug"><span class="bv-slider"></span></span> Show debug readout</label>
-    <div class="bv-foot-btns">
-      <button type="button" id="bv-reset">Reset to defaults</button>
-      <button type="button" id="bv-refresh">Refresh advanced data</button>
-    </div>
+  <!-- Top-level tabs, one per feature. The first (Advanced Stats) is the default. Switching is purely
+       client-side (popup.js toggles .bv-tab-active + the matching .bv-panel); nothing persists. -->
+  <div class="bv-tabs" role="tablist" id="bv-tabs">
+    <button type="button" class="bv-tab bv-tab-active" data-panel="bv-panel-adv" role="tab" aria-selected="true">Advanced Stats</button>
+    <button type="button" class="bv-tab" data-panel="bv-panel-pl" role="tab" aria-selected="false">Top-list ranks</button>
+    <button type="button" class="bv-tab" data-panel="bv-panel-mx" role="tab" aria-selected="false">Matchup analyzer</button>
   </div>
 
-  <div class="bv-status" id="bv-status" role="status" aria-live="polite"></div>
-
-  <!-- Top-list ranks. The master toggle shows/hides the inline rank badges ("• PL #N" / "• RZ #N" /
-       "• RB #N") and this section's body. The "Starters from" dropdown picks the SP rank source; closers
-       and batters are always Pitcher List (the only source that ranks them). -->
-  <div class="bv-pl">
-    <div class="bv-pl-head">
-      <span class="bv-pl-title">Top-list ranks</span>
-      <span class="bv-master" title="Show top-list ranks on players">
-        <span class="bv-master-lab" id="bv-pl-on-lab">On</span>
-        <label class="bv-switch"><input type="checkbox" id="bv-pl-on" checked aria-label="Show top-list ranks"><span class="bv-slider"></span></label>
+  <!-- ========================================================================= -->
+  <!-- Tab 1 - Advanced Stats: the BATTERS / PITCHERS column table. Its own feature  -->
+  <!-- toggle (chrome.storage.sync 'advancedOn') turns the injected Savant columns +  -->
+  <!-- ESPN cell highlighting on or off, independent of the whole-extension switch.   -->
+  <!-- ========================================================================= -->
+  <section class="bv-panel" id="bv-panel-adv" role="tabpanel">
+    <div class="bv-adv-head">
+      <span class="bv-adv-title">Advanced stats</span>
+      <span class="bv-master" title="Show the advanced Savant columns + cell highlighting">
+        <span class="bv-master-lab" id="bv-adv-on-lab">On</span>
+        <label class="bv-switch"><input type="checkbox" id="bv-adv-on" checked aria-label="Show advanced stats"><span class="bv-slider"></span></label>
       </span>
     </div>
 
-    <div class="bv-pl-body" id="bv-pl-body">
-      <!-- Starters rank source. Closers + batters always come from Pitcher List; options are populated
-           from BV.spSourceList() in popup.js. -->
-      <label class="bv-pl-source" for="bv-sp-source">Starters from
-        <select id="bv-sp-source"></select>
-      </label>
-
-      <!-- Per-list toggles. A list shows only when the master toggle AND its own toggle are on. -->
-      <div class="bv-pl-lists">
-        <label class="bv-pl-list"><span class="bv-switch"><input type="checkbox" id="bv-pl-on-sp" checked><span class="bv-slider"></span></span> Starters</label>
-        <label class="bv-pl-list"><span class="bv-switch"><input type="checkbox" id="bv-pl-on-rp" checked><span class="bv-slider"></span></span> Closers</label>
-        <label class="bv-pl-list"><span class="bv-switch"><input type="checkbox" id="bv-pl-on-hit" checked><span class="bv-slider"></span></span> Batters</label>
-      </div>
-
-      <!-- Source health: per-list rows parsed + when last updated. A short/failed parse shows ⚠ here
-           instead of silently rendering no ranks. Filled from chrome.storage.local by popup.js. -->
-      <div class="bv-pl-health" id="bv-pl-health"></div>
-
-      <p class="bv-pl-note">
-        Starters come from the source above; closers and batters are always Pitcher List. Ranks are
-        fetched automatically each week — <b>Fetch latest ranks</b> pulls them now (e.g. right after a new
-        list drops). If a week fails to parse (e.g. a site changes its page), paste the rankings below as a
-        fallback — the article's list or simple lines like <code>1 Player Name</code> — and <b>Save</b>. A
-        pasted starters override applies to the selected source for that week only; auto-fetch then resumes.
-        <b>Clear</b> drops it and re-fetches now.
+    <div class="bv-adv-body" id="bv-adv-body">
+      <p class="bv-note">
+        Red = better than your threshold, blue = worse, stronger mark = further away.
+        <b>Show</b> adds or removes the column; <b>Highlight</b> toggles its colouring (the value is kept).
+        Values compare in the units shown in each column (SqUp% in %, xwOBA as .xxx). Changes apply live.
       </p>
-      <div class="bv-pl-fetchrow">
-        <button type="button" id="bv-pl-fetch">Fetch latest ranks</button>
-      </div>
-      <label class="bv-pl-lab" for="bv-pl-sp" id="bv-pl-sp-lab">Override — starters (Pitcher List)</label>
-      <textarea id="bv-pl-sp" class="bv-pl-ta" rows="4" placeholder="1 Jacob Misiorowski&#10;2 Paul Skenes&#10;3 Cristopher Sánchez&#10;…"></textarea>
-      <label class="bv-pl-lab" for="bv-pl-rp">Override — closers (saves)</label>
-      <textarea id="bv-pl-rp" class="bv-pl-ta" rows="4" placeholder="1 Mason Miller&#10;2 Jhoan Duran&#10;3 Josh Hader&#10;…"></textarea>
-      <label class="bv-pl-lab" for="bv-pl-hit">Override — batters ("Top 150 Hitters")</label>
-      <textarea id="bv-pl-hit" class="bv-pl-ta" rows="4" placeholder="1 Shohei Ohtani&#10;2 Juan Soto&#10;3 Aaron Judge&#10;…"></textarea>
-      <div class="bv-pl-btns">
-        <button type="button" id="bv-pl-clear">Clear override</button>
-        <button type="button" id="bv-pl-save">Save override</button>
+
+      <table class="bv-table" id="bv-table">
+        <thead>
+          <tr><th>Column</th><th>Show</th><th>Threshold</th><th>Highlight</th><th>Direction</th></tr>
+        </thead>
+        <tbody id="bv-tbody"><!-- rows built in popup.js --></tbody>
+      </table>
+
+      <div class="bv-foot">
+        <button type="button" id="bv-reset">Reset to defaults</button>
+        <button type="button" id="bv-refresh">Refresh advanced data</button>
       </div>
     </div>
+  </section>
+
+  <!-- ========================================================================= -->
+  <!-- Tab 2 - Top-list ranks. The section's master toggle shows/hides the inline    -->
+  <!-- rank badges ("• PL #N" / "• RZ #N" / "• RB #N") and this body. The "Starters   -->
+  <!-- from" dropdown picks the SP rank source; closers and batters are always        -->
+  <!-- Pitcher List (the only source that ranks them).                                -->
+  <!-- ========================================================================= -->
+  <section class="bv-panel bv-hidden" id="bv-panel-pl" role="tabpanel">
+    <div class="bv-pl">
+      <div class="bv-pl-head">
+        <span class="bv-pl-title">Top-list ranks</span>
+        <span class="bv-master" title="Show top-list ranks on players">
+          <span class="bv-master-lab" id="bv-pl-on-lab">On</span>
+          <label class="bv-switch"><input type="checkbox" id="bv-pl-on" checked aria-label="Show top-list ranks"><span class="bv-slider"></span></label>
+        </span>
+      </div>
+
+      <div class="bv-pl-body" id="bv-pl-body">
+        <!-- Starters rank source. Closers + batters always come from Pitcher List; options are populated
+             from BV.spSourceList() in popup.js. -->
+        <label class="bv-pl-source" for="bv-sp-source">Starters from
+          <select id="bv-sp-source"></select>
+        </label>
+
+        <!-- Per-list toggles. A list shows only when the master toggle AND its own toggle are on. -->
+        <div class="bv-pl-lists">
+          <label class="bv-pl-list"><span class="bv-switch"><input type="checkbox" id="bv-pl-on-sp" checked><span class="bv-slider"></span></span> Starters</label>
+          <label class="bv-pl-list"><span class="bv-switch"><input type="checkbox" id="bv-pl-on-rp" checked><span class="bv-slider"></span></span> Closers</label>
+          <label class="bv-pl-list"><span class="bv-switch"><input type="checkbox" id="bv-pl-on-hit" checked><span class="bv-slider"></span></span> Batters</label>
+        </div>
+
+        <!-- Source health: per-list rows parsed + when last updated. A short/failed parse shows ⚠ here
+             instead of silently rendering no ranks. Filled from chrome.storage.local by popup.js. -->
+        <div class="bv-pl-health" id="bv-pl-health"></div>
+
+        <p class="bv-pl-note">
+          Starters come from the source above; closers and batters are always Pitcher List. Ranks are
+          fetched automatically each week — <b>Fetch latest ranks</b> pulls them now (e.g. right after a new
+          list drops). If a week fails to parse (e.g. a site changes its page), paste the rankings below as a
+          fallback — the article's list or simple lines like <code>1 Player Name</code> — and <b>Save</b>. A
+          pasted starters override applies to the selected source for that week only; auto-fetch then resumes.
+          <b>Clear</b> drops it and re-fetches now.
+        </p>
+        <div class="bv-pl-fetchrow">
+          <button type="button" id="bv-pl-fetch">Fetch latest ranks</button>
+        </div>
+        <label class="bv-pl-lab" for="bv-pl-sp" id="bv-pl-sp-lab">Override — starters (Pitcher List)</label>
+        <textarea id="bv-pl-sp" class="bv-pl-ta" rows="4" placeholder="1 Jacob Misiorowski&#10;2 Paul Skenes&#10;3 Cristopher Sánchez&#10;…"></textarea>
+        <label class="bv-pl-lab" for="bv-pl-rp">Override — closers (saves)</label>
+        <textarea id="bv-pl-rp" class="bv-pl-ta" rows="4" placeholder="1 Mason Miller&#10;2 Jhoan Duran&#10;3 Josh Hader&#10;…"></textarea>
+        <label class="bv-pl-lab" for="bv-pl-hit">Override — batters ("Top 150 Hitters")</label>
+        <textarea id="bv-pl-hit" class="bv-pl-ta" rows="4" placeholder="1 Shohei Ohtani&#10;2 Juan Soto&#10;3 Aaron Judge&#10;…"></textarea>
+        <div class="bv-pl-btns">
+          <button type="button" id="bv-pl-clear">Clear override</button>
+          <button type="button" id="bv-pl-save">Save override</button>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <!-- ========================================================================= -->
+  <!-- Tab 3 - Matchup analyzer (boxscore / FantasyCast page). On a matchup boxscore  -->
+  <!-- Barrel Vision adds each team's PROJECTED weekly total beneath ESPN's live       -->
+  <!-- totals, tinted by who's projected to win each category. Scoring / timeframe /   -->
+  <!-- categories are LOCKED to the standard 10-cat league (R/HR/RBI/SB/OPS · K/QS/SV/ -->
+  <!-- ERA/WHIP, weekly Mon-Sun) while those variations are still untested - shown     -->
+  <!-- read-only so it's clear they exist and will open up later.                      -->
+  <!-- ========================================================================= -->
+  <section class="bv-panel bv-hidden" id="bv-panel-mx" role="tabpanel">
+    <div class="bv-mx-sec">
+      <div class="bv-mx-sec-head">
+        <span class="bv-mx-sec-title">Matchup analyzer</span>
+        <span class="bv-mx-sec-tag">boxscore · beta</span>
+        <span class="bv-master bv-mx-master" title="Show matchup projections on the boxscore">
+          <span class="bv-master-lab" id="bv-mx-on-lab">On</span>
+          <label class="bv-switch"><input type="checkbox" id="bv-mx-on" checked aria-label="Show matchup projections"><span class="bv-slider"></span></label>
+        </span>
+      </div>
+      <div class="bv-mx-body" id="bv-mx-body">
+        <p class="bv-mx-sec-note">
+          On a matchup <b>boxscore</b> or <b>FantasyCast</b> page, a <b>projected weekly total</b> row is added
+          per team beneath ESPN's live category totals, with the <span class="bv-mx-win-key">winning team's cell
+          highlighted</span> in each category. It's a stable full-week projection, so you can compare it against
+          the actual totals as the week plays out.
+        </p>
+        <!-- Scoring / timeframe / categories are read-only for now: only the standard weekly 10-cat path is
+             tested. The selects + checkboxes carry the `disabled` attr (checkboxes get it in popup.js); they
+             show the current (default) league so it's clear the controls exist and will be unlocked later. -->
+        <div class="bv-mx-opts">
+          <label class="bv-mx-opt" for="bv-mx-scoring">Scoring
+            <select id="bv-mx-scoring" disabled>
+              <option value="h2h_categories">Head-to-head categories</option>
+              <option value="h2h_points">Head-to-head points</option>
+              <option value="roto">Rotisserie</option>
+            </select>
+          </label>
+          <label class="bv-mx-opt" for="bv-mx-period">Timeframe
+            <select id="bv-mx-period" disabled>
+              <option value="weekly">Weekly · Mon–Sun</option>
+              <option value="daily">Daily</option>
+            </select>
+          </label>
+        </div>
+        <div class="bv-mx-cats-lab">Categories your league scores</div>
+        <div class="bv-mx-cats" id="bv-mx-cats"><!-- category checkboxes built in popup.js --></div>
+        <p class="bv-mx-lock-note">
+          Scoring, timeframe and categories are locked to your league's defaults while the analyzer is in
+          beta — other variations aren't tested yet and will be unlocked later.
+        </p>
+        <p class="bv-mx-foot-note" id="bv-mx-scoring-note"></p>
+        <!-- Accuracy log: the content script records each team's daily projection snapshot + the live actual
+             locally (no backend). Export copies it to the clipboard for tuning the model after a few weeks. -->
+        <div class="bv-mx-logrow">
+          <button type="button" id="bv-mx-log-export">Export accuracy log</button>
+          <span class="bv-mx-log-note">daily projection vs actual — for tuning</span>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <!-- Global footer + status, shared across tabs (debug HUD covers all three features). -->
+  <div class="bv-globalfoot">
+    <label class="bv-debug-toggle"><span class="bv-switch"><input type="checkbox" id="bv-debug"><span class="bv-slider"></span></span> Show debug readout</label>
   </div>
+  <div class="bv-status" id="bv-status" role="status" aria-live="polite"></div>
 
   <!-- No inline scripts/handlers (extension-page CSP forbids them). core.js first, then popup.js. -->
   <script src="shared/core.js"></script>
