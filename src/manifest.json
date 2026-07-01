@@ -1,9 +1,15 @@
 {
   "manifest_version": 3,
   "name": "Barrel Vision",
-  "version": "0.26.1",
+  "version": "0.27.0",
   "description": "Inline Baseball Savant contact-quality metrics on ESPN Fantasy Baseball: barrel%, xwOBA, the xwOBA-wOBA gap, xERA, pitcher K%/BB%/K-BB% and more, plus weekly starting-pitcher ranks from Pitcher List, Razzball or RotoBaller, next to ESPN's own stats.",
   "homepage_url": "https://github.com/bikemeardsley/Barrel-Vision",
+  "icons": {
+    "16": "icons/icon16.png",
+    "32": "icons/icon32.png",
+    "48": "icons/icon48.png",
+    "128": "icons/icon128.png"
+  },
   "permissions": ["storage", "declarativeContent", "contextMenus"],
   "host_permissions": [
     "https://baseballsavant.mlb.com/*",
@@ -27,6 +33,12 @@
   ],
   "action": {
     "default_popup": "popup.html",
-    "default_title": "Barrel Vision - thresholds & data"
+    "default_title": "Barrel Vision - thresholds & data",
+    "default_icon": {
+      "16": "icons/icon16.png",
+      "32": "icons/icon32.png",
+      "48": "icons/icon48.png",
+      "128": "icons/icon128.png"
+    }
   }
 }

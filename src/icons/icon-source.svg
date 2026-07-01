@@ -1,0 +1,33 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="128" height="128" viewBox="0 0 128 128">
+  <defs>
+    <radialGradient id="bvg" cx="0.4" cy="0.36" r="0.85">
+      <stop offset="0" stop-color="#F9F5ED"></stop>
+      <stop offset="0.55" stop-color="#F0E9DB"></stop>
+      <stop offset="1" stop-color="#DBD2BC"></stop>
+    </radialGradient>
+  </defs>
+  <rect x="0" y="0" width="128" height="128" rx="28" fill="var(--bv2-ink, #0F1726)"></rect>
+  <g transform="translate(10.24 2.24) scale(0.84)">
+    <g transform="rotate(-45 64 64)">
+      <path d="M 18 60 L 94 55.5 A 8.5 8.5 0 0 1 94 72.5 L 18 68 A 4 4 0 0 1 18 60 Z" fill="#EFEAE0"></path>
+    </g>
+    <circle cx="67.5" cy="33.5" r="13.5" fill="var(--bv2-ink, #0F1726)"></circle>
+    <g transform="translate(56.5 22.5) scale(0.55)">
+      <circle cx="20" cy="20" r="20" fill="url(#bvg)"></circle>
+      <path d="M 11.6 4.4 A 23.3 23.3 0 0 0 11.6 35.6" fill="none" stroke="#C13A31" stroke-width="2.6" stroke-linecap="round"></path>
+      <path d="M 28.4 4.4 A 23.3 23.3 0 0 1 28.4 35.6" fill="none" stroke="#C13A31" stroke-width="2.6" stroke-linecap="round"></path>
+      <g fill="none" stroke="#C13A31" stroke-width="1.7" stroke-linecap="round">
+        <path d="M 6.42 9.31 L 9.3 10.69"></path>
+        <path d="M 4.26 16.37 L 7.42 16.83"></path>
+        <path d="M 4.26 23.63 L 7.42 23.17"></path>
+        <path d="M 6.42 30.69 L 9.3 29.31"></path>
+        <path d="M 30.7 10.69 L 33.58 9.31"></path>
+        <path d="M 32.58 16.83 L 35.74 16.37"></path>
+        <path d="M 32.58 23.17 L 35.74 23.63"></path>
+        <path d="M 30.7 29.31 L 33.58 30.69"></path>
+      </g>
+    </g>
+  </g>
+  <rect x="30" y="94" width="68" height="9" rx="4.5" fill="#46536F"></rect>
+  <rect x="30" y="94" width="49" height="9" rx="4.5" fill="var(--bv2-red, #D62E2E)"></rect>
+</svg>
