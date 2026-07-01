@@ -55,20 +55,20 @@ switch turns the whole extension on or off, and every change applies live, with 
 (*higher / lower = better*), split into **BATTERS** and **PITCHERS** column sets. **Refresh advanced data**
 re-pulls from Savant; **Reset to defaults** restores the stock thresholds.
 
-<p align="center"><img src="docs/images/popup-advanced.png" width="360" alt="Advanced Stats tab: Show/Highlight toggles and thresholds for the batter and pitcher columns"></p>
+<p align="center"><img src="docs/images/popup-advanced.png" width="400" alt="Advanced Stats tab: Show/Highlight toggles and thresholds for the batter and pitcher columns"></p>
 
 **Top-list ranks** — choose where **starting-pitcher** ranks come from (**Pitcher List**, **Razzball**, or
 **RotoBaller**); closer and hitter ranks always come from Pitcher List. Toggle each list on its own, see a
 per-list health line (rows parsed and when they were last cached), **Fetch latest ranks** on demand, or paste
 a manual override for a week if a site changes its page.
 
-<p align="center"><img src="docs/images/popup-ranks.png" width="360" alt="Top-list ranks tab: starter rank source, per-list toggles, and manual override boxes"></p>
+<p align="center"><img src="docs/images/popup-ranks.png" width="400" alt="Top-list ranks tab: starter rank source, per-list toggles, and manual override boxes"></p>
 
 **Matchup analyzer** — switch the boxscore projections on or off and see which **scoring, timeframe, and
 categories** are in play. These are locked to a standard 10-category weekly league while the analyzer is in
 beta; **Export accuracy log** copies the daily projection-vs-actual history out for tuning.
 
-<p align="center"><img src="docs/images/popup-matchup.png" width="360" alt="Matchup analyzer tab: scoring, timeframe, and the ten scored categories, locked in beta"></p>
+<p align="center"><img src="docs/images/popup-matchup.png" width="400" alt="Matchup analyzer tab: scoring, timeframe, and the ten scored categories, locked in beta"></p>
 
 Flip **Show debug readout** at the bottom of any tab for a one-line data-health HUD — how many Savant
 hitters/pitchers loaded, rows matched on the current page, handedness records found, and which rank lists are
