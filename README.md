@@ -1,6 +1,6 @@
-<p align="center"><img src="src/icons/icon128.png" width="96" alt="Barrel Vision"></p>
-
-# Barrel Vision
+<h1 align="center">
+  <img src="src/icons/icon128.png" width="40" align="middle" alt="">&nbsp; Barrel Vision
+</h1>
 
 <!-- When published, point the three store badges at their listing URLs and swap the grey "coming soon"
      for a brand colour (e.g. ?logo=googlechrome and a real https link). -->
