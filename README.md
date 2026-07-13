@@ -2,12 +2,12 @@
   <img src="src/icons/icon128.png" width="40" align="top" alt="">&nbsp; Barrel Vision
 </h1>
 
-<!-- When published, point the three store badges at their listing URLs and swap the grey "coming soon"
-     for a brand colour (e.g. ?logo=googlechrome and a real https link). -->
+<!-- Edge is live (badge points at the listing). When Chrome/Firefox publish, point those badges at their
+     listing URLs and swap the grey "coming soon" for a brand colour + a real https link. -->
 <p align="center">
   <a href="#roadmap"><img alt="Status: Beta" src="https://img.shields.io/badge/status-beta-FF8C00"></a>
   <a href="#install"><img alt="Chrome Web Store" src="https://img.shields.io/badge/Chrome-coming%20soon-9E9E9E?logo=googlechrome&logoColor=white"></a>
-  <a href="#install"><img alt="Edge Add-ons" src="https://img.shields.io/badge/Edge-coming%20soon-9E9E9E?logo=microsoftedge&logoColor=white"></a>
+  <a href="https://microsoftedge.microsoft.com/addons/detail/barrel-vision/jicglngfajpmhgcajbcchopgacolcnlc"><img alt="Edge Add-ons" src="https://img.shields.io/badge/Edge-Add--ons-0078D7?logo=microsoftedge&logoColor=white"></a>
   <a href="#install"><img alt="Firefox Add-ons" src="https://img.shields.io/badge/Firefox-coming%20soon-9E9E9E?logo=firefoxbrowser&logoColor=white"></a>
   <a href="https://buymeacoffee.com/bikemeardsley"><img alt="Buy Me a Coffee" src="https://img.shields.io/badge/Buy_Me_a_Coffee-FFDD00?logo=buymeacoffee&logoColor=black"></a>
 </p>
@@ -17,8 +17,9 @@ handedness**, **weekly top-list ranks**, and **matchup analysis** right on your 
 pages — inline with ESPN's own stats on roster lists, in the player card, and on the matchup boxscore.
 No more tab-switching to read a player or size up a week.
 
-> **Beta** · Barrel Vision works and is in active use, but it's still under development and is **not yet
-> published** to the Chrome, Edge, or Firefox stores — for now, [install it unpacked](#install). The
+> **Beta** · Barrel Vision works and is in active use, and is now on the
+> [**Edge Add-ons store**](https://microsoftedge.microsoft.com/addons/detail/barrel-vision/jicglngfajpmhgcajbcchopgacolcnlc).
+> Chrome Web Store and Firefox listings are still in progress — for those, [install it unpacked](#install). The
 > advanced-stats overlay works on any ESPN Fantasy Baseball roster; the **matchup analyzer** is currently
 > tuned to a standard **10-category weekly head-to-head** league (R/HR/RBI/SB/OPS · K/QS/SV/ERA/WHIP,
 > Mon–Sun), with other formats unlocking as they're tested.
@@ -117,8 +118,8 @@ Players are matched by name, so there's no setup. Unmatched players just show bl
 
 ## Install
 
-Once Barrel Vision is published you'll install it straight from the **Chrome Web Store**, **Edge Add-ons**,
-or **Firefox Add-ons** (badges above). Until then, load it unpacked:
+On Edge, install it straight from the [**Edge Add-ons store**](https://microsoftedge.microsoft.com/addons/detail/barrel-vision/jicglngfajpmhgcajbcchopgacolcnlc).
+The **Chrome Web Store** and **Firefox Add-ons** listings are still in progress; until they land, load it unpacked:
 
 1. Download or clone this repo.
 2. Open `chrome://extensions` (or `edge://extensions`) and turn on **Developer mode**.
@@ -144,7 +145,7 @@ Barrel Vision runs today on **ESPN Fantasy Baseball** in Chrome and Edge. Planne
 - **More fantasy platforms:** Yahoo Fantasy, Sleeper, CBS Sports, and Fantrax.
 - **More league formats in the matchup analyzer:** rotisserie, head-to-head points, daily, and custom
   category sets (it's locked to a standard 10-category weekly league for now).
-- **More browsers and store listings:** Chrome Web Store, Edge Add-ons, and Firefox Add-ons.
+- **More browsers and store listings:** Chrome Web Store and Firefox Add-ons (now live on [Edge Add-ons](https://microsoftedge.microsoft.com/addons/detail/barrel-vision/jicglngfajpmhgcajbcchopgacolcnlc)).
 
 ---
 
