@@ -19,7 +19,9 @@ node_modules/
 package-lock.json
 
 # Local-only: kept out of the public repo (origin userscript, dev-only test harness, internal docs).
-# docs/images/ stays tracked — the README displays those screenshots.
+# docs/images/ stays tracked — the README displays those screenshots — EXCEPT the store-submission
+# assets below, which are local-only.
+docs/images/edge-store/
 userscript/
 tests/
 package.json
